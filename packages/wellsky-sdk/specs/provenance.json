@@ -1,0 +1,17 @@
+{
+  "retrievedOn": "2026-10-22",
+  "sources": {
+    "v2": {
+      "url": "https://csclientapi.wellsky.com/client-api-prod/swagger/v2/swagger.json",
+      "sha256": "b66863462f3336a9f7032d259cdde978a9c5d91e0daa6a7012bfc739651bf638",
+      "operations": 78,
+      "schemas": 124
+    },
+    "v3": {
+      "url": "https://csclientapi.wellsky.com/client-api-prod/swagger/v3/swagger.json",
+      "sha256": "91e0175899573b137af27fb88a89c565a22caa3792163a7b6f6a4628a4f4cf04",
+      "operations": 78,
+      "schemas": 122
+    }
+  }
+}

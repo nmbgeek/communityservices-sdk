@@ -1,0 +1,11 @@
+Community Services SDK
+Copyright 2026 Choice Technology Solutions, LLC
+
+This SDK is licensed under the Apache License, Version 2.0.
+
+The pinned API descriptions originate from WellSky Community Services.
+Their source URLs and hashes are recorded in specs/provenance.json within
+the SDK package. The SDK license does not grant rights to WellSky services,
+trademarks, or separately owned third-party materials.
+
+This is an independent integration and has no WellSky endorsement.

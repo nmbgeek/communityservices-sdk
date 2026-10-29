@@ -1,0 +1,103 @@
+{
+  "name": "@choiceapps/communityservices-sdk",
+  "version": "0.1.0",
+  "description": "SDK for WellSky Community Services (HMIS), formerly ServicePoint, Client API V2 and V3",
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./v2": {
+      "import": {
+        "types": "./dist/esm/v2.d.ts",
+        "default": "./dist/esm/v2.js"
+      },
+      "require": {
+        "types": "./dist/cjs/v2.d.ts",
+        "default": "./dist/cjs/v2.js"
+      }
+    },
+    "./v3": {
+      "import": {
+        "types": "./dist/esm/v3.d.ts",
+        "default": "./dist/esm/v3.js"
+      },
+      "require": {
+        "types": "./dist/cjs/v3.d.ts",
+        "default": "./dist/cjs/v3.js"
+      }
+    },
+    "./testing": {
+      "import": {
+        "types": "./dist/esm/testing.d.ts",
+        "default": "./dist/esm/testing.js"
+      },
+      "require": {
+        "types": "./dist/cjs/testing.d.ts",
+        "default": "./dist/cjs/testing.js"
+      }
+    },
+    "./browser": {
+      "types": "./browser/index.d.mts",
+      "import": "./browser/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "API.md",
+    "SSVF.md",
+    "CHANGELOG.md",
+    "specs/provenance.json",
+    "browser",
+    "docs",
+    "examples",
+    "AGENTS.md",
+    "llms.txt",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "generate:check": "node scripts/generate.mjs --check",
+    "specs:check": "node scripts/check-specs.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "npm run generate:check && npm run build && node scripts/check-docs.mjs && tsc -p test/tsconfig.json && node --test --test-concurrency=2 test/*.test.mjs",
+    "package:check": "npm test && node scripts/verify-package.mjs",
+    "prepack": "npm test",
+    "docs:check": "npm run build && node scripts/check-docs.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.1",
+    "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.56.1 <2"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
+  },
+  "license": "Apache-2.0",
+  "author": "Choice Technology Solutions, LLC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nmbgeek/communityservices-sdk.git",
+    "directory": "packages/wellsky-sdk"
+  }
+}
