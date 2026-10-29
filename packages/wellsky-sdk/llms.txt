@@ -1,0 +1,26 @@
+# WellSky Community Services SDK
+
+> Server-side TypeScript SDK for WellSky Community Services (HMIS), formerly ServicePoint, using Client API V2/V3 and optional tenant-configured Playwright/GWT workflows.
+
+- [Agent guide](AGENTS.md): integration invariants, source navigation, verification.
+- [Documentation index](docs/README.md): task-oriented navigation.
+- [Using the SDK](docs/using-the-sdk.md): installation, credentials, REST and browser reads, durable workflows, and recovery.
+- [Quickstart](docs/getting-started.md): executable offline read.
+- [Capabilities](docs/capabilities.md): REST coverage versus verified workflows and limitations.
+- [Integration methods](docs/integration-methods.md): why each workflow uses REST, GWT-RPC, browser forms, or multipart and how retries preserve intent.
+- [WellSky feedback](docs/vendor-issues/README.md): reproduced failures, contract questions, and public API coverage requests; submission status is not assumed.
+- [Configuration](docs/configuration.md): authentication, tenant connection settings, request defaults.
+- [HTTP operations](API.md): generated named methods.
+- [Helper reference](docs/reference.md): runtime exports and declaration contracts.
+- [Assessments](docs/assessments.md): questions, picklists, encoding, verification records.
+- [Dates](docs/dates-and-answers.md): DOB, effective timestamps, intervals.
+- [Browser sessions](docs/browser-session.md): login, password recovery, GWT adapters.
+- [Enrollments](docs/enrollments.md): entry, household members, interim, exit.
+- [Durable records](docs/durable-records.md): client source identity, household membership, case plans, source-key notes, structured recovery.
+- [Examples](examples/README.md): shipped files and installed-package test coverage.
+- [Profiles](docs/profiles.md): Client Record, Sex, DOB.
+- [Services](docs/services.md): Closed/Fully Met needs, bulk input, Funding Sources.
+- [SSVF fields](SSVF.md): conditional field choices and requirements.
+- [Files and notes](docs/files-and-notes.md): attachment locations, goal case notes.
+- [Recovery](docs/troubleshooting.md): ambiguous writes and session expiry.
+- [Development](docs/development.md): source checks and releases.

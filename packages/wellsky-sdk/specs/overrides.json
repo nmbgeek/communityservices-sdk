@@ -1,0 +1,6 @@
+{
+  "description": "Observed response-only corrections to the public Swagger schemas. No request schemas are broadened.",
+  "nullableResponseProperties": {
+    "ServiceCompleteViewModel": ["rhyInformation", "hopwaInformation", "pathInformation", "ssvfInformation"]
+  }
+}

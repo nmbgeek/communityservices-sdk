@@ -1,0 +1,73 @@
+const testTenant=process.env.WELLSKY_TEST_TENANT??'tenant-b';
+import {test,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {openUiSession,LoginError} from '../browser/index.mjs';
+
+const original='Synthetic-Test9!',temporary=original+'!';
+let root,chrome;
+before(async()=>{root=await mkdtemp(join(tmpdir(),'wellsky-password-test-'));if(process.env.WELLSKY_TEST_CHROME){const {chromium}=await import('playwright-core');chrome=await chromium.launch({headless:true,executablePath:process.env.WELLSKY_TEST_CHROME});}});
+after(async()=>{await chrome?.close();await rm(root,{recursive:true,force:true});});
+const browserTest=(name,fn)=>test(name,{skip:!process.env.WELLSKY_TEST_CHROME},fn);
+async function fixture({expired=true,stage,activePassword,loseReset=false,loseRestore=false,badLabels=false,rejectRestore=false,failProbe=false,defaultStore=false}={}){
+ const envFile=join(root,Math.random()+'.env'),journalDir=envFile+'.journal',source=`HMIS_UI_USER=synthetic\nHMIS_UI_PASSWORD=${original}\nHMIS_UI_PASSWORD_RECOVERY_DIR=${journalDir}\n`;
+ await writeFile(envFile,source);
+ let records=stage?[{version:1,appendCharacter:'!',stage}]:[],locked=false,launches=0;
+ const actions=[],contexts=[],history=[];
+ const account={password:activePassword??original,expired};
+ const hash=s=>createHash('sha256').update(s).digest('hex');
+ const recoveryScope=JSON.stringify([testTenant,'password-recovery',hash('synthetic')]);
+ const readDefault=async()=>JSON.parse(await readFile(join(journalDir,hash(recoveryScope)+'.json'),'utf8'));
+ const journalStage=async()=>defaultStore?(await readDefault()).at(-1).stage:records.at(-1).stage;
+ const store={async withLock(scope,work){assert.equal(scope,recoveryScope);if(locked)throw Error('Locked');locked=true;try{return await work();}finally{locked=false;}},async read(){assert.ok(locked);return structuredClone(records);},async write(scope,r){assert.ok(locked);records=structuredClone(r);history.push(records.at(-1).stage);}};
+ const html=`<input id="formfield-login"><input type="password" id="formfield-password"><button id="LoginView.fbtn_submit">LOGIN</button><div id="status"></div><script>
+ const byId=id=>document.getElementById(id);
+ function dashboard(){document.cookie='syntheticAuth=1; path=/';location.hash='mainPage';document.body.innerHTML='<p>Community Services</p><p>Home Page Dashboard</p><button title="Edit User Profile for Synthetic">Profile</button>';document.querySelector('button').onclick=()=>{document.body.insertAdjacentHTML('beforeend','<button id="UserProfilePopup.changePassword-button">Change Password</button>');byId('UserProfilePopup.changePassword-button').onclick=()=>{const names=${JSON.stringify(badLabels?['Wrong label','New Password','Re-enter New Password']:['Current Password','New Password','Re-enter New Password'])};document.body.insertAdjacentHTML('beforeend','<div role="dialog">'+names.map((n,i)=>'<table><tr><td><table><tr><td id="label'+i+'">'+n+'</td></tr></table></td><td><input type="password" maxlength="50" aria-labelledby="label'+i+'"></td></tr></table>').join('')+'<button id="UserProfileChangePasswordPopup.save-button">Save</button></div>');byId('UserProfileChangePasswordPopup.save-button').onclick=async()=>{const values=[...document.querySelectorAll('[role=dialog] input')].map(e=>e.value);const result=await window.synthetic('restore',values);if(result==='saved')document.querySelector('[role=dialog]').remove();};};};}
+ function bindLogin(){byId('LoginView.fbtn_submit').onclick=async()=>{const reset=!!byId('formfield-password2');const result=await window.synthetic(reset?'reset':'login',reset?[byId('formfield-password2').value,byId('formfield-password').value]:[byId('formfield-password').value]);if(result==='dashboard')dashboard();else if(result==='expired'){byId('status').textContent='Password has expired!';byId('formfield-password').value='';byId('status').insertAdjacentHTML('beforebegin','<input type="password" id="formfield-password2">');}};}if(document.cookie.includes('syntheticAuth=1'))dashboard();else bindLogin();
+ </script>`;
+ const chromium={async launch(){launches++;return {async newContext(){const c=await chrome.newContext();contexts.push(c);await c.exposeBinding('synthetic',async(_,op,values)=>{
+ actions.push(op);if(op==='login'){if(failProbe||values[0]!==account.password)return 'rejected';return account.expired?'expired':'dashboard';}
+ if(op==='reset'){assert.equal(await journalStage(),'temporary-attempted');assert.equal(values[0],temporary);assert.equal(values[1],temporary);account.password=temporary;account.expired=false;return loseReset?'lost':'dashboard';}
+ assert.equal(await journalStage(),'restore-attempted');assert.deepEqual(values,[temporary,original,original]);if(rejectRestore)return 'rejected';account.password=original;return loseRestore?'lost':'saved';
+ });const realRoute=c.route.bind(c);c.route=async()=>realRoute('**/*',r=>r.fulfill({contentType:'text/html',body:html}));return c;},async close(){await Promise.all(contexts.map(c=>c.close()));}};}};
+ const options={tenant:testTenant,chromium,envFile,timeoutMs:600,passwordRecovery:{store}};
+ return {options,store,actions,history,account,readDefault,records:()=>structuredClone(records),launches:()=>launches,env:()=>readFile(envFile,'utf8'),source,close:()=>Promise.all(contexts.map(c=>c.close()))};
+}
+
+browserTest('expired login restores original in a fresh context; completed retry does not change passwords',async()=>{
+ const f=await fixture();try{let s=await openUiSession(f.options);assert.equal(s.passwordRecovery,'restored-original');assert.deepEqual(f.actions,['login','reset','restore','login']);assert.equal(f.records().at(-1).stage,'original-verified');assert.equal(f.account.password,original);assert.equal(await f.env(),f.source);assert.ok(!JSON.stringify(f.records()).includes(original));await s.close();s=await openUiSession(f.options);assert.equal(s.passwordRecovery,'not-needed');assert.deepEqual(f.actions,['login','reset','restore','login','login']);await s.close();f.account.expired=true;s=await openUiSession(f.options);assert.equal(s.passwordRecovery,'restored-original');assert.equal(f.records().length,2);await s.close();}finally{await f.close();}
+});
+browserTest('explicitly disabled recovery stops before any password mutation',async()=>{const f=await fixture();try{await assert.rejects(openUiSession({...f.options,passwordRecovery:false}),e=>e instanceof LoginError&&e.code==='PASSWORD_EXPIRED');assert.deepEqual(f.actions,['login']);assert.equal(f.account.password,original);}finally{await f.close();}});
+for(const stage of ['temporary-active','temporary-attempted'])browserTest(`resume ${stage} verifies temporary once and never repeats reset`,async()=>{const f=await fixture({stage,expired:false,activePassword:temporary});try{const s=await openUiSession(f.options);assert.equal(s.passwordRecovery,'restored-original');assert.deepEqual(f.actions,['login','restore','login']);await s.close();}finally{await f.close();}});
+for(const stage of ['restore-attempted','restored'])browserTest(`resume ${stage} verifies original without another write`,async()=>{const f=await fixture({stage,expired:false});try{const s=await openUiSession(f.options);assert.deepEqual(f.actions,['login']);assert.equal(s.passwordRecovery,'restored-original');await s.close();}finally{await f.close();}});
+browserTest('lost reset acknowledgement permits one temporary login and no repeated reset',async()=>{const f=await fixture({loseReset:true});try{await assert.rejects(openUiSession(f.options),e=>e.recoveryStage==='temporary-attempted');const s=await openUiSession(f.options);assert.deepEqual(f.actions,['login','reset','login','restore','login']);await s.close();}finally{await f.close();}});
+browserTest('lost restore acknowledgement reconciles via original login only',async()=>{const f=await fixture({loseRestore:true});try{await assert.rejects(openUiSession(f.options),e=>e.recoveryStage==='restore-attempted');const s=await openUiSession(f.options);assert.deepEqual(f.actions,['login','reset','restore','login']);await s.close();}finally{await f.close();}});
+browserTest('rejected restore stops after one failed original probe; repeated call does not launch',async()=>{const f=await fixture({rejectRestore:true});try{await assert.rejects(openUiSession(f.options));await assert.rejects(openUiSession(f.options));const n=f.launches();await assert.rejects(openUiSession(f.options),e=>e.code==='RECOVERY_UNCERTAIN');assert.equal(f.launches(),n);assert.deepEqual(f.actions,['login','reset','restore','login']);}finally{await f.close();}});
+browserTest('changed settings form fails before save and retains temporary-active journal',async()=>{const f=await fixture({badLabels:true});try{await assert.rejects(openUiSession(f.options),e=>e.recoveryStage==='temporary-active');assert.deepEqual(f.actions,['login','reset']);}finally{await f.close();}});
+for(const stage of ['temporary-verification-attempted','original-verification-attempted'])test(`pending ${stage} blocks before browser launch`,async()=>{const f=await fixture({stage});await assert.rejects(openUiSession(f.options),e=>e.code==='RECOVERY_UNCERTAIN');assert.equal(f.launches(),0);});
+test('invalid recovery configuration cannot launch a browser',async()=>{for(const config of [null, {store:{},appendCharacter:'!'}, {appendCharacter:'!!'}, {appendCharacter:' '}]){const f=await fixture();await assert.rejects(openUiSession({...f.options,passwordRecovery:config?.appendCharacter?{store:f.store,...config}:config}),e=>e.code==='RECOVERY_CONFIGURATION');assert.equal(f.launches(),0);}});
+test('upstream errors cannot expose password fill arguments or causes',async()=>{const f=await fixture();const chromium={async launch(){throw Error('fill '+original);}};await assert.rejects(openUiSession({...f.options,chromium}),e=>{assert.ok(!String(e).includes(original));assert.equal(e.cause,undefined);return e.code==='LOGIN_FAILED';});});
+browserTest('failed temporary probe is not retried by later recovery calls',async()=>{const f=await fixture({stage:'temporary-attempted',failProbe:true});try{await assert.rejects(openUiSession(f.options));const n=f.launches();await assert.rejects(openUiSession(f.options));assert.equal(f.launches(),n);assert.deepEqual(f.actions,['login']);assert.equal(f.records().at(-1).stage,'temporary-verification-attempted');}finally{await f.close();}});
+browserTest('concurrent callers sharing an account store cannot both rotate the password',async()=>{const f=await fixture();try{const results=await Promise.allSettled([openUiSession(f.options),openUiSession(f.options)]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.deepEqual(f.actions,['login','reset','restore','login']);for(const r of results)if(r.status==='fulfilled')await r.value.close();}finally{await f.close();}});
+browserTest('failure to persist the attempted reset prevents its submission',async()=>{const f=await fixture();f.store.write=async()=>{throw Error('Disk unavailable');};try{await assert.rejects(openUiSession(f.options));assert.deepEqual(f.actions,['login']);assert.equal(f.account.password,original);}finally{await f.close();}});
+browserTest('expired managed page reauthenticates before work and retains page identity',async()=>{
+ const f=await fixture({expired:false});try{const s=await openUiSession(f.options),page=s.page;await s.context.clearCookies();await page.goto(page.url().split('#')[0]);await s.ensureAuthenticated();assert.equal(s.page,page);assert.deepEqual(f.actions,['login','login']);await s.reauthenticate();assert.equal(s.page,page);assert.deepEqual(f.actions,['login','login','login']);await s.close();}finally{await f.close();}
+});
+browserTest('password expiration during reauthentication restores original on the same page',async()=>{
+ const f=await fixture({expired:false});try{const s=await openUiSession(f.options),page=s.page;f.account.expired=true;await s.context.clearCookies();await page.goto(page.url().split('#')[0]);await s.ensureAuthenticated();assert.equal(s.page,page);assert.equal(s.passwordRecovery,'restored-original');assert.equal(f.account.password,original);assert.deepEqual(f.actions,['login','login','reset','restore','login']);await s.close();}finally{await f.close();}
+});
+browserTest('recovery disabled survives explicit reauthentication and never rotates',async()=>{
+ const f=await fixture({expired:false});try{const s=await openUiSession({...f.options,passwordRecovery:false});f.account.expired=true;await assert.rejects(s.reauthenticate(),e=>e.code==='PASSWORD_EXPIRED');await assert.rejects(s.ensureAuthenticated(),e=>e.code==='PASSWORD_EXPIRED');assert.deepEqual(f.actions,['login','login']);await s.close();}finally{await f.close();}
+});
+browserTest('omitted passwordRecovery resets by default using the configured durable directory',async()=>{
+ const f=await fixture({defaultStore:true});try{const s=await openUiSession({...f.options,passwordRecovery:undefined});assert.equal(s.passwordRecovery,'restored-original');assert.deepEqual(f.actions,['login','reset','restore','login']);assert.equal((await f.readDefault()).at(-1).stage,'original-verified');await s.close();const next=await openUiSession({...f.options,passwordRecovery:undefined});assert.equal(next.passwordRecovery,'not-needed');assert.equal(f.actions.filter(a=>a==='reset').length,1);await next.close();}finally{await f.close();}
+});
+browserTest('normal 50-character passwords can log in but expiration stops before an oversized reset',async()=>{
+ const f=await fixture({expired:false});f.account.password='A'.repeat(48)+'9!';await writeFile(f.options.envFile,f.source.replace(original,f.account.password));try{const s=await openUiSession(f.options);assert.equal(s.passwordRecovery,'not-needed');f.account.expired=true;await assert.rejects(s.reauthenticate(),e=>e.code==='RECOVERY_CONFIGURATION');assert.deepEqual(f.actions,['login','login']);await s.close();}finally{await f.close();}
+});
+browserTest('stale visible dashboard uses a separate authentication probe after a failed operation',async()=>{
+ const {withPageLock}=await import('../browser/page-lock.mjs');const f=await fixture({expired:false});try{const s=await openUiSession(f.options),page=s.page;await s.context.clearCookies();let calls=0;await assert.rejects(withPageLock(page,async()=>{calls++;throw Error('Server returned 500');}),e=>e.code==='SESSION_INTERRUPTED'&&e.reauthenticated);assert.equal(calls,1);assert.equal(s.page,page);assert.deepEqual(f.actions,['login','login']);await s.close();}finally{await f.close();}
+});

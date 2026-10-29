@@ -1,0 +1,57 @@
+# dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local agent tools and indexes
+.claude/
+.gitnexus/
+.cache/
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+*.tsbuildinfo
+
+# production
+/build
+
+# env & secrets  (NEVER commit credentials or tokens)
+.env
+.env*.local
+.token_cache.json*
+test_token.json
+/*_api*.json
+/*_training_*.json
+/credentials*.json
+/*.local.json
+# data uploads (may contain client PII)
+/uploads/
+*.local.csv
+
+# prisma
+/prisma/*.db
+/prisma/*.db-journal
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+coverage/
+test-results/
+playwright-report/
+/private-probes/
+/handoff.zip
+/handoff/
