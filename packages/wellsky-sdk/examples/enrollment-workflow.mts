@@ -1,5 +1,6 @@
 import {
   createEnrollmentWorkflow,
+  type EntryExitType,
   type EnrollmentAssessmentPlan,
   type EnrollmentWorkflowDiscovery,
   type EnrollmentWorkflowResult,
@@ -7,13 +8,15 @@ import {
 } from '@choiceapps/communityservices-sdk/browser';
 
 /** Call with a REST client, authenticated discovery/enrollment adapters,
- * a birthDates adapter for DOB plans, and the same durable store on every run. This example does not log in or run itself. */
+ * a birthDates adapter for DOB plans, and the same durable store on every run.
+ * Types other than HUD/VA require dependencies.assessmentLocations from current provider discovery.
+ * This example does not log in or run itself. */
 export async function enrollAndReview(
   dependencies:EnrollmentWorkflowOptions,
   input:{
     clientId:number;
     providerId:number;
-    type:'HUD'|'VA';
+    type:EntryExitType;
     /** Stable application record ID, not a new UUID on each retry. */
     sourceId:string;
     entryDate:string;

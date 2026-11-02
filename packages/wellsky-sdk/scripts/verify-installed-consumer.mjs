@@ -50,7 +50,15 @@ for (const [Client, version] of [[Root, '3.0'], [V2, '2.0'], [V3, '3.0'], [requi
 console.log('Installed package: all six REST ESM/CommonJS entry points and the optional ESM browser entry work');
 `);
   const browserTypeConsumer = `
-import { AttachmentConflictError, type VeteranStatus, type ClientCreationInput } from '@choiceapps/communityservices-sdk/browser';
+import { AttachmentConflictError, type VeteranStatus, type ClientCreationInput, type EntryExitType, type EnrollmentDiscoveryInput, type EnrollmentWorkflowOptions } from '@choiceapps/communityservices-sdk/browser';
+const entryExitTypes = ['HUD','Basic','Standard','RHY','VA','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit'] satisfies EntryExitType[];
+const entryContexts: EnrollmentDiscoveryInput[] = entryExitTypes.map(type=>({clientId:1,providerId:2,type,entryDate:'2026-11-02T16:00:00Z'}));
+const assessmentLocations: EnrollmentWorkflowOptions['assessmentLocations'] = {PATH:{entry:'syntheticEntry',interim:'syntheticInterim',exit:'syntheticExit'}};
+// @ts-expect-error Unknown Entry/Exit types remain rejected.
+const invalidEntryType: EntryExitType = 'Unknown';
+// @ts-expect-error A supplied mapping must include an interim location.
+const incompleteLocations: EnrollmentWorkflowOptions['assessmentLocations'] = {PATH:{entry:'syntheticEntry'}};
+void entryContexts; void assessmentLocations;
 const veteranStatus: VeteranStatus = 'Yes (HUD)';
 const clientCreation: ClientCreationInput = {sourceId:'synthetic',body:{firstName:'Synthetic',lastName:'Test',dateEffective:'2026-10-24T16:00:00Z',veteranStatus}};
 // @ts-expect-error Unsuffixed labels are rejected before creation.

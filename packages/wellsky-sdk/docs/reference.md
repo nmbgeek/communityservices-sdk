@@ -36,7 +36,7 @@ Runtime exports: `AttachmentConflictError`, `EnrollmentWorkflowError`, `LoginErr
 | Profile fields and Sex | [Client profile](../browser/client-profile.d.mts) | `read`, `update` |
 | Calendar DOB | [Birth dates](../browser/date-of-birth.d.mts) | `read`, `validate`, `verify`, `update` |
 | Provider assessment defaults | [Discovery](../browser/program-discovery.d.mts) | `listAssessments`, `getProviderAssessments` |
-| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, member additions, interim, exit, journal status |
+| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, member additions, interim, exit, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
 | Entry-date and exit UI ports | [Member entry](../browser/member-entry-date.d.mts), [exit](../browser/household-exit.d.mts) | Fresh reads and targeted completion |
 | Services and recovery diagnostics | [Service recording](../browser/service-recording.d.mts) | `record`, `recordBulk`, Funding Sources, `RecoveryDiagnostic` |
 | SSVF conditional rules | [SSVF types](../browser/ssvf-rules.d.mts) | [Field rules](../SSVF.md) and dated option snapshots |

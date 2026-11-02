@@ -155,6 +155,48 @@ test('VA enrollment uses the separate VA assessment defaults',async()=>{
   const result=await f.workflow().createEnrollment({...entryInput(),type:'VA'});
   assert.equal(result.enrollmentId,50);assert.equal(f.entries[0].type,'VA');assert.equal(f.counts.enrollment,1);
 });
+for(const type of ['HUD','Basic','Standard','RHY','VA','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit']){
+ test(`${type} uses explicit locations for discovery, entry, interim and same-key reconciliation`,async()=>{
+  const f=fixture(),locations={entry:'syntheticEntry',interim:'syntheticInterim',exit:'syntheticExit'};
+  const get=f.discovery.getProviderAssessments;
+  f.discovery.getProviderAssessments=async input=>{
+   const result=await get(input);
+   return {...result,defaults:[...result.defaults,...['entry','interim','exit'].map((phase,i)=>({location:locations[phase],resolution:'resolved',assessment:{assessmentId:10+i,code:`SELECTED_${phase.toUpperCase()}`,name:phase,assignedToAssessmentTab:true}}))]};
+  };
+  const options={...f,assessmentLocations:{[type]:locations}},workflow=createEnrollmentWorkflow(options),input={...entryInput(),type};
+  const discovered=await workflow.discoverExit({clientId:1,providerId:2,type,entryDate});
+  assert.equal(discovered.entry.assessment.code,'SELECTED_ENTRY');assert.equal(discovered.interim.assessment.code,'SELECTED_INTERIM');assert.equal(discovered.exit.assessment.code,'SELECTED_EXIT');
+  const entry=await workflow.createEnrollment(input);assert.equal(entry.assessmentCode,'SELECTED_ENTRY');assert.equal(f.entries[0].type,type);
+  const interim={key:'review',enrollmentKey:input.key,clientId:1,reviewDate,assessment:{answers:{TOTAL:{value:10}},notApplicable:{OPTIONAL:'Synthetic'},carryForward:['ROWS']}};
+  assert.equal((await workflow.createInterim(interim)).assessmentCode,'SELECTED_INTERIM');
+  const before=structuredClone(f.counts);
+  assert.equal((await createEnrollmentWorkflow(options).createEnrollment(input)).outcome,'already-present');
+  assert.equal((await createEnrollmentWorkflow(options).createInterim(interim)).outcome,'already-present');
+  assert.deepEqual(f.counts,before);
+ });
+}
+test('unsupported types and missing explicit mappings cannot fall back to HUD or VA',async()=>{
+ for(const type of ['Unknown','Basic','Standard','RHY','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit']){
+  const f=fixture();let reads=0;f.api.clients.get=async()=>{reads++;throw Error('Unexpected read');};
+  await assert.rejects(f.workflow().createEnrollment({...entryInput(),type}),type==='Unknown'?/supported Entry\/Exit type/:/assessment locations required/);
+  assert.equal(reads,0);assert.equal(f.counts.enrollment,0);assert.equal(f.journal.size,0);
+ }
+});
+test('location mappings reject invalid configuration and unresolved phases before writes',async()=>{
+ for(const assessmentLocations of [null,[],{Unknown:{entry:'e',interim:'i'}},{PATH:{entry:'e'}},{PATH:{entry:' ',interim:'i'}},{PATH:{entry:'e',interim:'i',exit:''}},{PATH:{entry:'e',interim:'i',other:'x'}}]){
+  const f=fixture();assert.throws(()=>createEnrollmentWorkflow({...f,assessmentLocations}));assert.equal(f.journal.size,0);
+ }
+ for(const fault of ['missing','duplicate','unset','unresolved']){
+  const f=fixture(),get=f.discovery.getProviderAssessments;
+  f.discovery.getProviderAssessments=async input=>{const result=await get(input);if(fault==='missing')result.defaults.shift();else if(fault==='duplicate')result.defaults.push(structuredClone(result.defaults[0]));else result.defaults[0].resolution=fault;return result;};
+  const workflow=createEnrollmentWorkflow({...f,assessmentLocations:{PATH:{entry:'showHudEntry',interim:'showHudInterim'}}});
+  await assert.rejects(workflow.createEnrollment({...entryInput(),type:'PATH'}),/program assessment default unresolved/);
+  assert.equal(f.counts.enrollment,0);assert.equal(f.journal.size,0);
+ }
+ const f=fixture(),workflow=createEnrollmentWorkflow({...f,assessmentLocations:{PATH:{entry:'showHudEntry',interim:'showHudInterim'}}});
+ await assert.rejects(workflow.discoverExit({clientId:1,providerId:2,type:'PATH',entryDate}),/including exit/);
+ assert.equal(f.journal.size,0);
+});
 test('incomplete enrollment pagination cannot be mistaken for no matching enrollment',async()=>{
   const f=fixture();f.api.enrollments.listForClient=async()=>({count:1,values:[]});
   await assert.rejects(f.workflow().createEnrollment(entryInput()),/incomplete enrollment list/);assert.equal(f.counts.enrollment,0);

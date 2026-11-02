@@ -6,6 +6,7 @@ import {readProgramCatalog,encodeAnswers,encodeNewSubassessmentRow,toItems} from
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const positive=v=>Number.isSafeInteger(v)&&v>0;
+const entryExitTypes=['HUD','Basic','Standard','RHY','VA','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit'];
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
 const fail=message=>{throw new EnrollmentWorkflowError(message);};
@@ -71,17 +72,25 @@ async function enrollments(api,clientId){
 
 /** Explicit orchestration for an existing client. All writers must share the durable store.
  * No automatic retries of uncertain REST writes. This is not a cross-system transaction. */
-export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollmentSession,exitUi,memberEntryDatePort,birthDates}){
+export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollmentSession,exitUi,memberEntryDatePort,birthDates,assessmentLocations={}}){
  const tenantScope=apiScope(api, discovery, helpers, enrollmentSession, exitUi);
  if(typeof discovery?.getProviderAssessments!=='function'||typeof helpers?.createInterimUpdate!=='function'||!store)fail('REST API, discovery, enrollment helpers and durable store required');
+ if(!object(assessmentLocations))fail('assessment locations must be a map by Entry/Exit type');
+ for(const [type,locations]of Object.entries(assessmentLocations)){
+  if(!entryExitTypes.includes(type))fail('unsupported Entry/Exit type in assessment locations');
+  fields(locations,['entry','interim','exit']);
+  if(['entry','interim'].some(phase=>typeof locations[phase]!=='string'||!locations[phase].trim())||Object.values(locations).some(location=>typeof location!=='string'||!location.trim()))fail('entry and interim assessment locations required; exit location must be nonempty when supplied');
+ }
+ const locationsByType={HUD:{entry:'showHudEntry',interim:'showHudInterim',exit:'showHudExit'},VA:{entry:'showVaEntry',interim:'showVaInterim',exit:'showVaExit'},...structuredClone(assessmentLocations)};
  const discover=async(input,includeExit=false)=>{
-  fields(input,['clientId','providerId','type','entryDate']);if(!positive(input.clientId)||!positive(input.providerId)||!['HUD','VA'].includes(input.type))fail('client, provider and HUD/VA type required');const at=date(input.entryDate);
+  fields(input,['clientId','providerId','type','entryDate']);if(!positive(input.clientId)||!positive(input.providerId)||!entryExitTypes.includes(input.type))fail('client, provider and supported Entry/Exit type required');const at=date(input.entryDate);
+  const locations=locationsByType[input.type];if(!locations||includeExit&&!locations.exit)fail(`assessment locations required for ${input.type}${includeExit?' including exit':''}`);
   const client=toItems(await api.clients.get({path:{clientId:input.clientId}}));if(client.length!==1||client[0].clientId!==input.clientId||client[0].isActive===false)fail('active client required');
   const catalog=await readProgramCatalog(api);const providers=catalog.providers.filter(p=>p.providerId===input.providerId);if(providers.length!==1)fail('active operational program required');
   const configuration=await discovery.getProviderAssessments({providerId:input.providerId});if(configuration.providerId!==input.providerId)fail('provider discovery mismatch');
-  const prefix=input.type==='HUD'?'showHud':'showVa',resolved={};
-  for(const [phase,suffix]of [['entry','Entry'],['interim','Interim'],...(includeExit?[['exit','Exit']]:[])]){
-   const matches=configuration.defaults.filter(d=>d.location===prefix+suffix);if(matches.length!==1||matches[0].resolution!=='resolved'||!matches[0].assessment?.code)fail('program assessment default unresolved');
+  const resolved={};
+  for(const phase of ['entry','interim',...(includeExit?['exit']:[])]){
+   const matches=configuration.defaults.filter(d=>d.location===locations[phase]);if(matches.length!==1||matches[0].resolution!=='resolved'||!matches[0].assessment?.code)fail('program assessment default unresolved');
    const assessment=matches[0].assessment;const definition=await api.assessments.getDefinition({clientId:input.clientId,assessmentCode:assessment.code,effectiveDate:at,refresh:true});
    if(definition.tenant!==api.tenant||definition.assessmentCode!==assessment.code||definition.unresolvedPicklists.length)fail('assessment metadata incomplete');
    resolved[phase]={assessment,definition};
@@ -93,7 +102,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
  const run=async(kind,raw,internal={})=>{
   fields(raw,kind==='entry'?['key','clientId','providerId','type','entryDate','assessment']:['key','enrollmentKey','clientId',kind==='exit'?'exitDate':'reviewDate','assessment']);
   const input=structuredClone(raw);key(input.key);if(!positive(input.clientId))fail('client ID required');
-  if(kind==='entry'){if(!positive(input.providerId)||!['HUD','VA'].includes(input.type))fail('program and HUD/VA type required');input.entryDate=date(input.entryDate);}else{key(input.enrollmentKey);if(kind==='addition')input.entryDate=date(input.entryDate);else if(kind==='exit')input.exitDate=date(input.exitDate);else input.reviewDate=date(input.reviewDate);}
+  if(kind==='entry'){if(!positive(input.providerId)||!entryExitTypes.includes(input.type))fail('program and supported Entry/Exit type required');input.entryDate=date(input.entryDate);}else{key(input.enrollmentKey);if(kind==='addition')input.entryDate=date(input.entryDate);else if(kind==='exit')input.exitDate=date(input.exitDate);else input.reviewDate=date(input.reviewDate);}
   if(!object(input.assessment))fail('assessment plan required');
   const locked=internal.locked?async(_scope,work)=>work():store.withLock.bind(store);
   return locked(scope(input.clientId),async()=>{
@@ -263,7 +272,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   for(const member of input.members){fields(member,['clientId','assessment']);if(!positive(member.clientId)||!object(member.assessment))fail('member client and assessment required');}
   input.members.sort((a,b)=>a.clientId-b.clientId);const ids=input.members.map(m=>m.clientId);
   if(new Set(ids).size!==ids.length||kind==='entry'&&!ids.includes(input.headClientId))fail('unique members including head required');
-  if(kind==='entry'){if(!positive(input.householdId)||!positive(input.providerId)||!['HUD','VA'].includes(input.type))fail('household and program required');input.entryDate=date(input.entryDate);}
+  if(kind==='entry'){if(!positive(input.householdId)||!positive(input.providerId)||!entryExitTypes.includes(input.type))fail('household, program and supported Entry/Exit type required');input.entryDate=date(input.entryDate);}
   else{key(input.enrollmentKey);if(kind==='addition')input.entryDate=date(input.entryDate);else if(kind==='exit')input.exitDate=date(input.exitDate);else input.reviewDate=date(input.reviewDate);}
   // Read the cohort under its journal lock, then acquire all client locks in order.
   // Recheck under both locks so concurrent membership growth cannot escape protection.

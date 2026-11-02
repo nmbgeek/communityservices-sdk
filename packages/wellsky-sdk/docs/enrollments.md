@@ -27,7 +27,26 @@ REST form metadata includes question paths, mandatory flags, current option IDs/
 
 ## Enrollment workflow from program discovery
 
-`createEnrollmentWorkflow` composes the provider catalog, current program assessment defaults, question/picklist metadata, REST enrollment and answer writes, and the durable GWT interim helper. It accepts an **existing client ID** and supports HUD and VA program defaults. It does not create clients or infer program eligibility, answers, conditional applicability, or which verification types a program requires.
+`createEnrollmentWorkflow` composes the provider catalog, current program assessment defaults, question/picklist metadata, REST enrollment and answer writes, and the durable GWT interim helper. It accepts an **existing client ID**. It does not create clients or infer program eligibility, answers, conditional applicability, or which verification types a program requires.
+
+The workflow's `EntryExitType` accepts `HUD`, `Basic`, `Standard`, `RHY`, `VA`, `Basic Center Program Entry/Exit`, `PATH`, `Quick Call`, and `Transitional Living Program Entry/Exit`. `type` identifies the Entry/Exit category; `assessmentCode` identifies its assessment instrument. The workflow sends the selected type unchanged to REST. The generated REST methods accept a string; neither contract guarantees that the server permits every type for a given provider.
+
+HUD and VA retain built-in provider display locations. For another type, supply `assessmentLocations` when constructing the workflow. First inspect `getProviderAssessments({providerId}).defaults`, including each item's `label`, then map the desired type's entry, interim, and optional exit phases to their exact `location` values. These values are display-control identifiers, not assessment names, IDs, or codes. The workflow resolves the instruments from fresh provider discovery on every operation. It rejects missing, duplicate, unset, or unresolved defaults before record writes and never falls back to another type.
+
+```ts
+const workflow = createEnrollmentWorkflow({
+  api, discovery, helpers, store,
+  assessmentLocations: {
+    PATH: {
+      entry: selectedPathEntry.location,
+      interim: selectedPathInterim.location,
+      exit: selectedPathExit.location,
+    },
+  },
+});
+```
+
+`assessmentLocations` is a partial map keyed by `EntryExitType`. Each supplied mapping requires nonempty `entry` and `interim` locations; `exit` is required for `discoverExit` and household exits. A supplied HUD or VA mapping replaces that type's built-in mapping. Keep the same configuration across retries and use separate workflow instances when providers need different location mappings. Existing journal checks still reject changed instruments or definitions. Additional types have synthetic workflow coverage, not new live acceptance evidence. The November 2, 2026 report of type rejection was traced to the SDK's former HUD/VA restriction, not a reproduced WellSky server failure.
 
 ```ts
 import {

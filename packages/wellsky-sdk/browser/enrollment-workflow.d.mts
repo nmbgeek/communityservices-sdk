@@ -30,10 +30,13 @@ export interface EnrollmentAssessmentPlan {
   notApplicable?:Record<string,string>;
   carryForward?:string[];
 }
+export type EntryExitType = 'HUD'|'Basic'|'Standard'|'RHY'|'VA'|'Basic Center Program Entry/Exit'|'PATH'|'Quick Call'|'Transitional Living Program Entry/Exit';
+/** Exact location identifiers returned by getProviderAssessments, not assessment codes. */
+export interface EnrollmentAssessmentLocations {entry:string;interim:string;exit?:string;}
 export interface EnrollmentDiscoveryInput {
   clientId:number;
   providerId:number;
-  type:'HUD'|'VA';
+  type:EntryExitType;
   /** Timezone-qualified timestamp with whole-second precision. */
   entryDate:string;
 }
@@ -152,6 +155,9 @@ export interface HouseholdWorkflowStatus {
   members:Array<{clientId:number;key:string}&Partial<Omit<InterimWorkflowResult&ExitWorkflowResult,'clientId'|'key'>>>;
 }
 export interface EnrollmentWorkflowOptions {
+  /** HUD/VA have built-in mappings. Other types require locations from current provider discovery.
+   * A mapping replaces all built-in locations for that type. Retain it across retries. */
+  assessmentLocations?:Partial<Record<EntryExitType,EnrollmentAssessmentLocations>>;
   api:Pick<WellSkyClient,'tenant'|'clients'|'providers'|'enrollments'|'assessments'|'assessmentsMobile'|'subassessments'>&Partial<Pick<WellSkyClient,'households'>>;
   discovery:Pick<ProgramDiscovery,'getProviderAssessments'>;
   helpers:Pick<GwtEnrollmentHelpers,'createInterimUpdate'>&Partial<Pick<GwtEnrollmentHelpers,'addHouseholdMembers'>>;

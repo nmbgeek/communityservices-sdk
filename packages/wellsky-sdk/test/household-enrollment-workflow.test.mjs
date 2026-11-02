@@ -110,6 +110,23 @@ test('real durable file store supports household scope locks and restarted workf
 });
 
 function exitInput(){return {key:'exit',enrollmentKey:'entry',headClientId:1,exitDate,destination:'Rental by client (HUD)',reasonForLeaving:'Completed program',members:[1,2].map(clientId=>({clientId,assessment:{answers:{TOTAL:{value:clientId*1000},OPTIONAL:{value:'Exit answer '+clientId}},carryForward:['ROWS']}}))};}
+for(const type of ['Basic','Standard','RHY','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit']){
+ test(`${type} household entry, interim and exit retain type and reconcile without repeated writes`,async()=>{
+  const f=fixture(),locations={entry:'syntheticEntry',interim:'syntheticInterim',exit:'syntheticExit'},get=f.discovery.getProviderAssessments;
+  f.discovery.getProviderAssessments=async input=>{const result=await get(input);return {...result,defaults:result.defaults.map((d,i)=>({...d,location:Object.values(locations)[i]}))};};
+  const options={...f,assessmentLocations:{[type]:locations}},input={...entryInput(),type},workflow=createEnrollmentWorkflow(options);
+  await workflow.createHouseholdEnrollment(input);
+  assert.deepEqual(f.entries.map(e=>e.type),[type,type]);
+  await workflow.createHouseholdInterim(interimInput());
+  await workflow.exitHousehold(exitInput());
+  const before={...f.counts,...f.exitCounts};
+  const resumed=createEnrollmentWorkflow(options);
+  assert.equal((await resumed.createHouseholdEnrollment(input)).outcome,'already-present');
+  assert.equal((await resumed.createHouseholdInterim(interimInput())).outcome,'already-present');
+  assert.equal((await resumed.exitHousehold(exitInput())).outcome,'already-present');
+  assert.deepEqual({...f.counts,...f.exitCounts},before);
+ });
+}
 
 test('household exits populate every member and reordered retries perform no writes',async()=>{
  const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());await f.workflow().createHouseholdInterim(interimInput());
