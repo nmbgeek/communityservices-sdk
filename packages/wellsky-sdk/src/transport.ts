@@ -76,6 +76,7 @@ export class Transport {
   readonly #control: RequestControl;
   readonly #observers: Pick<ClientOptions, "hooks" | "logger">;
   readonly #mobileDateCorrection: number | undefined;
+  readonly #captureErrorBody: boolean;
 
   constructor(options: ClientOptions, version: string, schemas: SchemaRegistry) {
     if (typeof window !== "undefined" || !("process" in globalThis)) throw new TypeError("WellSky SDK requires a server-side Node.js runtime");
@@ -94,6 +95,8 @@ export class Transport {
     const correction = options.mobileAssessmentDateCorrectionMinutes;
     if (correction !== undefined && (!Number.isSafeInteger(correction) || Math.abs(correction) > 840)) throw new ValidationError("client configuration", ["mobileAssessmentDateCorrectionMinutes"]);
     this.#mobileDateCorrection = correction;
+    if (options.captureErrorBody !== undefined && typeof options.captureErrorBody !== "boolean") throw new ValidationError("client configuration", ["captureErrorBody"]);
+    this.#captureErrorBody = options.captureErrorBody === true;
     this.#timeout = positiveInteger(options.timeoutMs ?? 30_000, "timeoutMs");
     this.#retries = positiveInteger(options.maxReadRetries ?? 2, "maxReadRetries", 0);
     this.#retryBase = positiveInteger(options.retryBaseDelayMs ?? 250, "retryBaseDelayMs", 0);
@@ -159,13 +162,16 @@ export class Transport {
 
   async #read(response: Response, operation: string, allowText = false): Promise<unknown> {
     if (!response.ok) {
-      // Discard upstream error content; it may contain client data or credentials.
-      await response.body?.cancel();
       const requestId = response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined;
       const wait = retryAfter(response.headers);
+      let responseBody: string | undefined;
+      // Retain raw content only by explicit opt-in, never for authentication or throttling.
+      if (this.#captureErrorBody && operation !== "POST /authentication/SetAuthKey" && ![401, 403, 429].includes(response.status)) {
+        try { responseBody = await response.text(); } catch { /* Keep the HTTP failure if diagnostic reading fails. */ }
+      } else await response.body?.cancel();
       if (response.status === 429) throw new ThrottledError(operation, wait ?? this.#retryBase, response.status, requestId);
       if (response.status === 401 || response.status === 403) throw new AuthError(operation, response.status);
-      throw new UpstreamError(operation, response.status, requestId, wait);
+      throw new UpstreamError(operation, response.status, requestId, wait, responseBody);
     }
     const text = await response.text();
     if (!text.trim()) return null;

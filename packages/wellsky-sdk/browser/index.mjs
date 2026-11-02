@@ -42,5 +42,6 @@ export {createShelterUi} from './shelter-ui.mjs';
 export {createShelterInventory, ShelterInventoryError} from './shelter-inventory.mjs';
 
 export * from './current-living-situation.mjs';
+export * from './coordinated-entry-event.mjs';
 
 export {resolveUiConnection} from './connection.mjs';

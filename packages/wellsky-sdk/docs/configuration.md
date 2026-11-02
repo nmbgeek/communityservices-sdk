@@ -21,6 +21,7 @@ The root export selects V3. `/v2` and `/v3` fix their own `x-version` headers. O
 | `metadataCacheTtlMs` | `60000` | Definition cache lifetime |
 | `metadataCacheMaxEntries` | `100` | Per-client metadata cache bound |
 | `mobileAssessmentDateCorrectionMinutes` | Unset | Measured integer offset from -840 to 840, applied only to AddAssessmentAnswer's effective-date query |
+| `captureErrorBody` | `false` | Opt-in `UpstreamError.responseBody`, capped at 16,384 characters and excluded from JSON serialization and telemetry; authentication and throttle bodies remain discarded. See [private diagnostics](troubleshooting.md#inspect-an-upstream-error-privately). |
 | `hooks`, `logger` | Unset | Allowlisted events without bodies, credentials, filters, or tokens |
 
 Matching tenant/base URL/transport clients share scheduling state and must use consistent scheduler settings. Coordination is within one process. Tenant consistency checks are described in [REST configuration](rest-client.md#configure-a-client).

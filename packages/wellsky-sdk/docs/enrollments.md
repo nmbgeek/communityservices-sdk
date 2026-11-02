@@ -107,6 +107,27 @@ See the [packaged enrollment example](../examples/enrollment-workflow.mts) for a
 
 [Live workflow acceptance](capabilities.md) covers a new synthetic client, exact entry/interim UI values, all verification table pages, and repeated calls with zero REST writes or GWT creations. [DOB workflow acceptance](capabilities.md) covers a leap-day DOB, distinct household member DOBs, a later-entry newborn, and repeated entry/interim operations after later assessment changes.
 
+### Yes/no answers
+
+Mobile answer writes store yes/no values empty (see [yes/no acceptance](assessments.md#yesno-answer-acceptance)). With the default `yesNoWrites: 'mobile'`, a plan that answers a yes/no question leaves its `scalars` stage pending. To save those answers, construct the workflow with the standard endpoint:
+
+```ts
+const workflow = createEnrollmentWorkflow({
+  api, discovery, helpers, store,
+  yesNoWrites: 'standard',
+  writeLabel: (question, option) => verifiedLabels.get(`${question.fieldName}:${option.code}`),
+});
+```
+
+In this mode the mobile batch carries no yes/no answers. After it verifies, a separate `yesno` stage sends every yes/no answer to `assessments.create` together with each mandatory top-level answer, as that endpoint requires:
+
+- Only mandatory lookups are supported, matching the live evidence. Any other mandatory type, including DOB, fails before any write.
+- A mandatory lookup in `answers` is sent with its `writeLabel` label.
+- A mandatory lookup in `notApplicable` is sent as `""` and stored empty at the assessment date. Blank acceptance was reproduced for a conditionally mandatory lookup only. The workflow refuses this before any write when the field already has a value at that date; answer it explicitly instead.
+- A mandatory lookup in `carryForward` is resent with the label of its recorded option. Unlike ordinary carry-forward, this writes a new row for it at the assessment date.
+
+Every mandatory label is resolved before the first write. The `yesno` stage verifies with a generic read one second after the effective instant, because a read at the instant omits yes/no answers, and requires each answer and its effective timestamp to match. The mode is recorded in the journal. An unfinished workflow started in one mode fails in the other rather than switching endpoints, including journals left pending by earlier mobile yes/no attempts; those require separate reconciliation. Yes/no children of new subassessment rows still use the mobile row write, which drops them, so leave them unanswered in workflow rows. Record Coordinated Entry Events, which need yes/no and provider answers, with the [event recorder](coordinated-entry-events.md).
+
 ## Household enrollment and interim assessments
 
 The same workflow exposes `createHouseholdEnrollment` and `createHouseholdInterim`. Supply `enrollmentSession: session.enrollmentSession` when constructing it. Initial household enrollment requires an existing household and at least two existing clients, including its head. Later interims and exits accept a nonempty subset of enrolled members. Establish household membership separately before enrollment.

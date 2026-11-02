@@ -25,7 +25,7 @@ Runtime exports at the root: `AmbiguousCommitError`, `AssessmentMetadata`, `Auth
 
 Import from `@choiceapps/communityservices-sdk/browser` in server-side ESM. These helpers use the tenant supplied by your application. Browser interfaces require `playwright-core`; some orchestration helpers use REST plus injected UI ports rather than directly launching a browser.
 
-Runtime exports: `AttachmentConflictError`, `EnrollmentWorkflowError`, `LoginError`, `SessionInterruptedError`, `createFileGwtMutationStore`, `createPlaywrightEnrollmentHelpers`, `createPlaywrightGwtSession`, `createCasePlanUi`, `createCasePlans`, `createClientCreator`, `createClientProfile`, `createClientProfileUi`, `createClientWorkflows`, `createDateOfBirth`, `createDateOfBirthUi`, `createEnrollmentWorkflow`, `createHouseholdExitUi`, `createHouseholdUi`, `createHouseholds`, `createMemberEntryDatePort`, `createProgramDiscovery`, `createServiceRecorder`, `createServiceUi`, `getHouseholdOptions`, `getSsvfServiceRules`, `openEnrollmentSession`, `openUiSession`, `validateBirthDate`, `resolveUiConnection`.
+Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`, `EnrollmentWorkflowError`, `LoginError`, `SessionInterruptedError`, `createFileGwtMutationStore`, `createPlaywrightEnrollmentHelpers`, `createPlaywrightGwtSession`, `createCasePlanUi`, `createCasePlans`, `createClientCreator`, `createClientProfile`, `createClientProfileUi`, `createClientWorkflows`, `createCoordinatedEntryEventRecorder`, `createDateOfBirth`, `createDateOfBirthUi`, `createEnrollmentWorkflow`, `createHouseholdExitUi`, `createHouseholdUi`, `createHouseholds`, `createMemberEntryDatePort`, `createProgramDiscovery`, `createServiceRecorder`, `createServiceUi`, `getHouseholdOptions`, `getSsvfServiceRules`, `openEnrollmentSession`, `openUiSession`, `validateBirthDate`, `resolveUiConnection`.
 
 | Task | Contract | Methods or behavior |
 | --- | --- | --- |
@@ -62,3 +62,7 @@ See [shelter contracts](../browser/shelters.d.mts), [shelter workflow](shelters.
 ### Current Living Situation
 
 `createCurrentLivingSituationRecorder` and `CurrentLivingSituationConflictError`: [contact guide](current-living-situation.md), [declarations](../browser/current-living-situation.d.mts). `record` creates one journaled row per meaningful contact and verifies exact dates, answers, and recordset identity.
+
+### Coordinated Entry Events
+
+`createCoordinatedEntryEventRecorder` and `CoordinatedEntryEventConflictError`: [event guide](coordinated-entry-events.md), [declarations](../browser/coordinated-entry-event.d.mts). `record` creates one journaled CE Event row per event key through the standard assessment endpoint and verifies every answer, including provider locations and yes/no results.

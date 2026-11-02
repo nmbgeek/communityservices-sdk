@@ -18,7 +18,16 @@ export class ValidationError extends WellSkyError {
   constructor(operation: string, fields: readonly string[] = []) { super("validation", operation); this.name = "ValidationError"; this.fields = [...fields]; }
 }
 export class UpstreamError extends WellSkyError {
-  constructor(operation: string, status: number, requestId?: string, retryAfterMs?: number) { super("http", operation, { status, ...(requestId === undefined ? {} : { requestId }), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }); this.name = "UpstreamError"; }
+  /** Opt-in private diagnostics; non-enumerable and absent by default. */
+  declare readonly responseBody?: string;
+  declare readonly responseBodyTruncated?: boolean;
+  constructor(operation: string, status: number, requestId?: string, retryAfterMs?: number, responseBody?: string) {
+    super("http", operation, { status, ...(requestId === undefined ? {} : { requestId }), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }); this.name = "UpstreamError";
+    if (responseBody !== undefined) Object.defineProperties(this, {
+      responseBody: { value: responseBody.slice(0, 16384), enumerable: false },
+      responseBodyTruncated: { value: responseBody.length > 16384, enumerable: false },
+    });
+  }
 }
 export class AmbiguousCommitError extends WellSkyError {
   constructor(operation: string) { super("ambiguous_commit", operation); this.name = "AmbiguousCommitError"; }

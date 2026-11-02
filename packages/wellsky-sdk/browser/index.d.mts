@@ -73,6 +73,7 @@ export * from './shelters.mjs';
 export * from './shelter-inventory.mjs';
 
 export * from './current-living-situation.mjs';
+export * from './coordinated-entry-event.mjs';
 
 export {resolveUiConnection} from './connection.mjs';
 export type {UiConnection,UiConnectionOptions} from './connection.mjs';

@@ -23,7 +23,7 @@ export async function verifyInstalledConsumer(temporary,expectedVersion){
   execFileSync(process.execPath,[join(temporary,'check-examples.mjs')],{cwd:temporary,stdio:'inherit'});
   // Resolve the installed public entry point, including its private authentication
   // hooks for fault injection, without source fallbacks or import rewriting.
-  const regressionFiles=['tenant-connections.test.mjs','attachment-retry.test.mjs','client-creation.test.mjs','session-authentication.test.mjs','needs.test.mjs','gwt-mapped.test.mjs','shelters.test.mjs','shelter-inventory.test.mjs','current-living-situation.test.mjs','enrollment-workflow.test.mjs','household-enrollment-workflow.test.mjs','date-of-birth.test.mjs','review-regressions.test.mjs'];
+  const regressionFiles=['tenant-connections.test.mjs','attachment-retry.test.mjs','client-creation.test.mjs','session-authentication.test.mjs','needs.test.mjs','gwt-mapped.test.mjs','shelters.test.mjs','shelter-inventory.test.mjs','current-living-situation.test.mjs','coordinated-entry-event.test.mjs','enrollment-workflow.test.mjs','household-enrollment-workflow.test.mjs','date-of-birth.test.mjs','review-regressions.test.mjs'];
   for(const file of regressionFiles)cpSync(join('test',file),join(temporary,file));
   execFileSync(process.execPath,['--test','--test-concurrency=2',...regressionFiles.map(file=>join(temporary,file))],{cwd:temporary,stdio:'inherit'});
   writeFileSync(join(temporary, 'smoke.mjs'), `

@@ -10,7 +10,7 @@ const entryExitTypes=['HUD','Basic','Standard','RHY','VA','Basic Center Program 
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
 const fail=message=>{throw new EnrollmentWorkflowError(message);};
-export class EnrollmentWorkflowError extends Error {constructor(reason){super(`Enrollment workflow: ${reason}`);this.name='EnrollmentWorkflowError';this.reason=reason;}}
+export class EnrollmentWorkflowError extends Error {constructor(reason,options){super(`Enrollment workflow: ${reason}`,options);this.name='EnrollmentWorkflowError';this.reason=reason;if(options?.step!==undefined)this.step=options.step;}}
 function date(value){
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.000)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value.slice(0,19)+'Z').toISOString().slice(0,19)!==value.slice(0,19))fail('timezone-qualified whole-second date required');
  return new Date(value).toISOString();
@@ -26,11 +26,13 @@ function sameAnswer(expected,actual){
  return String(actual)===expected.answer_value;
 }
 function questions(response){const rows=toItems(response);if(!Array.isArray(rows)||rows.some(q=>!object(q)||typeof q.virt_field_name!=='string')||new Set(rows.map(q=>q.virt_field_name)).size!==rows.length)fail('ambiguous assessment read');return rows;}
-function compile(definition,input){
+function compile(definition,input,{yesNoWrites,writeLabel}={}){
  fields(input,['answers','subassessments','endDates','notApplicable','carryForward']);
  const answers=input.answers??{},excluded=input.notApplicable??{},carry=input.carryForward??[],rows=input.subassessments??[],ends=input.endDates??[];
  if(!object(answers)||!object(excluded)||!Array.isArray(carry)||!Array.isArray(rows)||!Array.isArray(ends)||new Set(carry).size!==carry.length)fail('invalid assessment plan');
- const scalar=encodeAnswers(definition.questions,answers,{endpoint:'mobile'}),index=new Map(definition.questions.map(q=>[q.fieldName,q]));
+ const encoded=encodeAnswers(definition.questions,answers,{endpoint:'mobile'}),index=new Map(definition.questions.map(q=>[q.fieldName,q]));
+ // Mobile writes store empty yes/no values, so the standard endpoint can own them instead.
+ const yesNo=yesNoWrites==='standard'?encoded.filter(q=>q.question_type==='yes_no'):[],scalar=encoded.filter(q=>!yesNo.includes(q));
  for(const [field,reason]of Object.entries(excluded))if(!index.has(field)||typeof reason!=='string'||!reason.trim())fail('not-applicable explanation required');
  for(const field of carry)if(typeof field!=='string'||!index.has(field))fail('unknown carry-forward field');
  const keys=new Set(),semantics=new Set();
@@ -58,7 +60,23 @@ function compile(definition,input){
  const birthDate=scalar.find(q=>q.virt_field_name==='SVPPROFDOB');
  if(birthDate){if(birthDate.question_type!=='date')fail('DOB question type changed');validateBirthDate(birthDate.answer_value);}
  for(const q of scalar)if(q.virt_field_name!=='SVPPROFDOB'&&q.question_type==='date'&&q.answer_value)date(q.answer_value);
- return {scalar:scalar.filter(q=>q.virt_field_name!=='SVPPROFDOB'),dateOfBirth:birthDate?.answer_value,rows:compiledRows,ends:compiledEnds,carry,excluded};
+ // The standard endpoint rejects a request that omits any mandatory answer, even one already
+ // recorded at that date. Resolve every label now so no write precedes a missing label.
+ const mandatory=[];
+ if(yesNo.length)for(const q of definition.questions){
+  if(!q.mandatory||['blank','label','sub_assessment'].includes(q.questionType)||yesNo.some(y=>y.virt_field_name===q.fieldName))continue;
+  // Only mandatory lookups were verified live; this also keeps DOB inside its own helper.
+  if(q.questionType!=='lookup')fail(`standard yes/no writes support mandatory lookups only; ${q.fieldName} is ${q.questionType}`);
+  const base={question_id:q.questionId,question_type:q.questionType,virt_field_name:q.fieldName};
+  if(q.fieldName in answers){
+   const [label]=encodeAnswers(definition.questions,{[q.fieldName]:answers[q.fieldName]},{endpoint:'standalone',writeLabel});
+   const [stored]=encodeAnswers(definition.questions,{[q.fieldName]:answers[q.fieldName]},{endpoint:'mobile'});
+   if(!label||!stored)fail(`mandatory answer ${q.fieldName} has no standard encoding`);
+   mandatory.push({...base,answer_value:label.answer_value,expected:stored.answer_value});
+  }else if(q.fieldName in excluded)mandatory.push({...base,answer_value:'',expected:''});
+  else if(carry.includes(q.fieldName))mandatory.push({...base,carry:true});
+ }
+ return {scalar:scalar.filter(q=>q.virt_field_name!=='SVPPROFDOB'),yesNo,mandatory,dateOfBirth:birthDate?.answer_value,rows:compiledRows,ends:compiledEnds,carry,excluded};
 }
 async function enrollments(api,clientId){
  const all=[],ids=new Set();let count;
@@ -72,9 +90,10 @@ async function enrollments(api,clientId){
 
 /** Explicit orchestration for an existing client. All writers must share the durable store.
  * No automatic retries of uncertain REST writes. This is not a cross-system transaction. */
-export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollmentSession,exitUi,memberEntryDatePort,birthDates,assessmentLocations={}}){
+export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollmentSession,exitUi,memberEntryDatePort,birthDates,assessmentLocations={},yesNoWrites='mobile',writeLabel}){
  const tenantScope=apiScope(api, discovery, helpers, enrollmentSession, exitUi);
  if(typeof discovery?.getProviderAssessments!=='function'||typeof helpers?.createInterimUpdate!=='function'||!store)fail('REST API, discovery, enrollment helpers and durable store required');
+ if(!['mobile','standard'].includes(yesNoWrites)||yesNoWrites==='standard'&&(typeof writeLabel!=='function'||typeof api.assessments?.create!=='function'))fail('yesNoWrites must be mobile, or standard with writeLabel and assessments.create');
  if(!object(assessmentLocations))fail('assessment locations must be a map by Entry/Exit type');
  for(const [type,locations]of Object.entries(assessmentLocations)){
   if(!entryExitTypes.includes(type))fail('unsupported Entry/Exit type in assessment locations');
@@ -112,6 +131,8 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(records.some(r=>r.stage!=='verified'&&r.key!==input.key))fail('another unfinished workflow must be reconciled first');
    const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate journal keys');let record=matches[0];
    const intentHash=hash({kind,input,...(internal.owner?{household:internal.owner}:{})});if(record&&record.intentHash!==intentHash)fail('key conflicts with previous intent');
+   // Changing the yes/no endpoint after an attempt would be an endpoint switch, not reconciliation.
+   if(record&&record.stage!=='verified'&&(record.yesNoWrites??'mobile')!==yesNoWrites)fail('yes/no write mode changed since this workflow started');
    const entry=kind!=='entry'?records.find(r=>r.key===input.enrollmentKey&&r.kind==='entry'&&r.stage==='verified'):null;
    if(kind!=='entry'&&!entry)fail('verified enrollment workflow required');
    const context=kind==='entry'?input:kind==='addition'?{...entry.context,entryDate:input.entryDate}:entry.context;
@@ -122,7 +143,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const definition=discovered[kind].definition,code=definition.assessmentCode,at=kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate);
    const exitSchemaHash=kind==='exit'?hash({assessment:discovered.exit.assessment,questions:definition.questions}):undefined;
    if(record&&kind==='exit'&&record.exitSchemaHash!==exitSchemaHash)fail('exit assessment configuration changed');
-   const plan=compile(definition,input.assessment);
+   const plan=compile(definition,input.assessment,{yesNoWrites,writeLabel});
    const carriesBirthDate=plan.carry.includes('SVPPROFDOB'),hasBirthDate=plan.dateOfBirth!==undefined||carriesBirthDate;
    let carriedBirthDate;
    if(hasBirthDate){
@@ -151,10 +172,28 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(proposedHead)checkHeadAnswer(proposedHead.answer_value);
    if(plan.ends.length&&(kind==='entry'||plan.ends.some(e=>Date.parse(e.endDate)>=Date.parse(at)||Date.parse(e.endDate)<Date.parse(context.entryDate))))fail('row closure must fall between entry and assessment');
    const read=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at}}));
-   const readCurrent=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code}}));
+   // An undated read omits rows dated after the server's current time, which can include this
+   // assessment's own rows. Read at the later of now and the assessment instant.
+   const readCurrent=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:new Date(Math.max(Date.now(),Date.parse(at))).toISOString().slice(0,19)+'Z'}}));
+   // A generic read at exactly the effective instant returns null for yes/no answers saved at
+   // that instant; one second later returns them. Only the yes/no step needs this.
+   const readSaved=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:new Date(Date.parse(at)+1000).toISOString()}}));
    const initial=await read();
    if(expectedHead===input.clientId&&headQuestion)checkHeadAnswer(proposedHead?.answer_value??initial.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH')?.answer_value);
    for(const field of plan.carry.filter(field=>field!=='SVPPROFDOB')){const q=initial.find(q=>q.virt_field_name===field);if(!q||(q.question_type==='sub_assessment'?!q.sub_assessment_answer_list?.length:!q.answer_value))fail('carry-forward field is empty');}
+   // Resend mandatory answers with the standard yes/no write. A blank write must not hide a recorded value.
+   const mandatory=plan.mandatory.map(m=>{
+    const recorded=initial.find(q=>q.virt_field_name===m.virt_field_name)?.answer_value;
+    if(m.carry){
+     const question=definition.questions.find(q=>q.fieldName===m.virt_field_name),options=question.options.filter(o=>String(o.id)===String(recorded));
+     const label=options.length===1?writeLabel(question,options[0]):undefined;
+     if(!label)fail(`carried mandatory answer ${m.virt_field_name} has no verified write label`);
+     if(m.virt_field_name==='HUD_RELATIONTOHOH')checkHeadAnswer(recorded);
+     return {question_id:m.question_id,question_type:m.question_type,virt_field_name:m.virt_field_name,answer_value:label,expected:String(recorded)};
+    }
+    if(m.expected===''&&recorded!==null&&recorded!==undefined&&recorded!=='')fail(`not-applicable mandatory field ${m.virt_field_name} has a recorded value; answer it explicitly`);
+    return m;
+   });
    // Validate closure targets before creating enrollment/review or submitting any answers.
    const current=await readCurrent();
    const currentHead=current.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH');
@@ -170,15 +209,22 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    }
    if(internal.preflight)return {assessmentCode:code,...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
    const wasVerified=record?.stage==='verified';
-   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
+   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const step=async(name,inspect,submit)=>{
     let result=await inspect();const previous=record.steps[name];
     if(result.found){record.steps[name]={state:'verified',value:result.value};await persist();return result.value;}
-    if(previous)fail(previous.state==='verified'?'verified step changed':'uncertain write requires reconciliation');
+    if(previous)throw new EnrollmentWorkflowError(previous.state==='verified'?'verified step changed':'uncertain write requires reconciliation',{step:name});
     record.steps[name]={state:'attempted'};await persist();
-    try{await submit(result);}catch{/* A write response alone never establishes success or absence. */}
-    result=await inspect();if(!result.found)fail('uncertain write requires reconciliation');
+    let writeError;
+    try{await submit(result);}catch(error){writeError=error;}
+    // A write response alone never establishes success or absence. Preserve its
+    // diagnostic cause in memory while reconciliation remains authoritative.
+    try{result=await inspect();}catch(readError){
+     if(writeError===undefined)throw readError;
+     throw new EnrollmentWorkflowError(readError instanceof EnrollmentWorkflowError?readError.reason:'uncertain write requires reconciliation',{step:name,cause:new AggregateError([writeError,readError],'Write and reconciliation failed')});
+    }
+    if(!result.found)throw new EnrollmentWorkflowError('uncertain write requires reconciliation',{step:name,...(writeError===undefined?{}:{cause:writeError})});
     record.steps[name]={state:'verified',value:result.value};await persist();return result.value;
    };
    const findEnrollment=async()=>{
@@ -226,6 +272,12 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(plan.scalar.length)await step('scalars',async()=>{
     const source=await read();return {found:plan.scalar.every(q=>{const r=source.find(r=>r.virt_field_name===q.virt_field_name);return r&&sameAnswer(q,r.answer_value)&&restDate(r.date_effective)===restDate(at);}),value:plan.scalar.map(q=>q.virt_field_name)};
    },()=>api.assessmentsMobile.addAnswer({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at},body:plan.scalar}));
+   // Standard writes update existing dated rows and change only the answers sent.
+   if(plan.yesNo.length){const body=[...plan.yesNo,...mandatory.map(({expected,...q})=>q)],expected=[...plan.yesNo,...mandatory.map(({expected,...q})=>({...q,answer_value:expected}))];
+    await step('yesno',async()=>{
+     const source=await readSaved();return {found:expected.every(q=>{const r=source.find(r=>r.virt_field_name===q.virt_field_name);return r&&sameAnswer(q,r.answer_value)&&restDate(r.date_effective)===restDate(at);}),value:plan.yesNo.map(q=>q.virt_field_name)};
+    },()=>api.assessments.create({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at},body}));
+   }
    // Group rows into one creation request. Partial success blocks resubmission until all rows reconcile.
    if(plan.rows.length){const rowIds=await step('rows',async()=>{
     const source=await readCurrent(),matched=Object.create(null),missing=[],matchedIds=new Set();

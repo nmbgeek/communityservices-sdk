@@ -28,6 +28,8 @@ The alternative enrollment-scoped assessment read included future-start rows as 
 
 In the controlled fixture, an AddAssessmentAnswer request with `dateEffective=2026-10-18T16:00:00Z` stored a child effective date of `2026-10-18T09:00:00`. Sending `23:00:00Z` through a measured 420-minute correction stored the intended `16:00:00` value. Body row-start dates were controlled independently and retained their intended instants.
 
+Suspected cause: the project maintainers report that WellSky servers run on Mountain Standard Time (UTC−7, no daylight saving), which matches the constant offset in winter and summer.
+
 **Ask WellSky:** Is `dateEffective` interpreted as UTC, a local wall time, or another representation? Can the API preserve an explicit offset and document its response timezone? Is the observed subtraction intended?
 
 The SDK exposes `mobileAssessmentDateCorrectionMinutes` for this measured query behavior only. It is not a global date shift and does not fix the complete-entry projection.

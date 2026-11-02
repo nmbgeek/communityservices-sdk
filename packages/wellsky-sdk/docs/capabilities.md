@@ -13,6 +13,8 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 | Programs | `readProgramCatalog` | Counted active/operational providers; includes organizations, not just enrollable programs; no permission/eligibility guarantee |
 | Program assessment defaults | `createProgramDiscovery` | Read-only admin UI/GWT discovery of entry/interim/exit defaults; requires administrative access |
 | Enrollment and assessment answers | `createEnrollmentWorkflow` | Discovers defaults, saves per-client answers/rows, verifies and reconciles; existing clients required |
+| Yes/no answer writes | `assessments.create`, `createEnrollmentWorkflow` with `yesNoWrites: 'standard'` | Standard writes store Yes/No with every mandatory answer; mobile writes store them empty (reproduced November 2, 2026). Generic reads need a query one second after the effective instant. See [yes/no acceptance](assessments.md#yesno-answer-acceptance). |
+| Coordinated Entry Events | `createCoordinatedEntryEventRecorder` | One journaled row per event through the standard endpoint, keeping provider locations and yes/no results that mobile writes drop; live sandbox acceptance November 2, 2026. Requires an instrument without mandatory questions. |
 | Client creation | `createClientCreator` | Durable source mapping; candidate detection without merging; lost receipt requires explicit verified ID |
 | Household creation and membership | `createHouseholds` | Stable keys, preserved history, later members, non-head departures and relationship changes; no head replacement or household closure |
 | Household enrollment | `createHouseholdEnrollment` | Existing household and at least two initial clients including head; per-member plans and IDs |

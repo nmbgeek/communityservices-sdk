@@ -31,6 +31,22 @@ WellSky requires a client context and known assessment code for these reads. The
 
 Use the raw `assessments.get`, `assessmentsMobile.getAnswers`, and `enrollments.getAssessment` methods for recorded answers. Use `encodeAnswers` and `encodeNewSubassessmentRow` for endpoint-specific encoding. Mobile lookups use option IDs; standalone/enrollment lookups require an explicit `writeLabel` resolver with tenant-verified labels. Raw option names are not assumed to be valid write labels. Provider answers are refused for mobile writes because that endpoint can silently discard them. Answer-state code mappings and multi-value serialization are caller-supplied; a refusal is never converted to `No`.
 
+## Yes/no answer acceptance
+
+`encodeAnswers` encodes a `yes_no` value of `true` or `"Yes"` as `"Yes"`, and `false` or `"No"` as `"No"`. Which endpoint persists that value matters more than the encoding.
+
+Reproduced on November 2, 2026 in a sandbox tenant with synthetic clients:
+
+- **Mobile `AddAssessmentAnswer` does not store yes/no values.** Requests with `"Yes"`, `"1"`/`"0"`, and `"true"`/`"false"` returned success and created a row at the intended effective date, but its value read back empty through both the generic and mobile reads. An integrator's 30-answer entry batch showed the same result.
+- **Mobile writes are insert-only per question and effective date.** A second mobile write to any question that already has a row at that date returned HTTP 400 `An error occurred while saving the entity changes`. This affected yes/no and integer questions alike, so a mobile retry cannot repair an empty yes/no row.
+- **Standard `assessments.create` stores `"Yes"`/`"No"`.** It rejects `"true"`/`"false"`. It updates existing rows at the same effective date, including empty yes/no rows created by mobile writes, and changed only the answers it was sent in a full before/after comparison.
+- **Every standard write must include every mandatory answer**, even one already recorded at that date; otherwise it returns `All mandatory answers are not provided`. A conditionally mandatory lookup that does not apply can be sent as `""`; it is stored empty at that date.
+- **Generic reads omit yes/no answers at exactly their effective instant.** `assessments.get` with `dateEffective` equal to the saved instant returns `null` for those yes/no answers while other types read normally. One second later returns the saved value. The standard create response has the same omission. Mobile reads return the value, but they have no date filter and show only the latest row, so a later record hides the date being checked.
+- **Mobile row writes drop yes/no and provider answers too.** In new Coordinated Entry Event rows, a yes/no result and a provider location were missing after a successful mobile write, while the standard endpoint saved both. `encodeNewSubassessmentRow` refuses answered provider children for mobile and omits unanswered ones. See [Coordinated Entry Events](coordinated-entry-events.md).
+- **The mobile date correction does not apply to standard writes.** A standard create sent the uncorrected instant and stored it unchanged.
+
+The enrollment workflow writes yes/no answers through the mobile batch by default. That keeps their stage pending because the saved values never verify. Construct it with `yesNoWrites: 'standard'` and a `writeLabel` resolver to send them through `assessments.create` instead; see [the enrollment workflow](enrollments.md#yesno-answers). It never treats an empty yes/no answer as `No`, skips a requested field, or switches endpoints for a stage that was already attempted. For a minimal reproduction, [enable private error diagnostics](troubleshooting.md#inspect-an-upstream-error-privately) and retain the question's current metadata.
+
 ## Race and ethnicity combinations
 
 `encodeAnswers` recognizes the standard `HUD_RACEETHNICITY` field. It resolves single-category and multiple-category answers to the tenant's `RACE_ETH_COMBO_*` option IDs. A single White answer uses `RACE_ETH_COMBO_WHI`, even when the caller supplies `RACE_ETH_WHI`. Atomic option IDs can read back with a label while appearing blank in the UI.
@@ -47,13 +63,13 @@ Category order is normalized and duplicates are removed. Missing combinations an
 
 ## Mobile effective-date correction
 
-Live testing found that `POST /assessmentsmobile/AddAssessmentAnswer` recorded effective dates seven hours earlier than the requested instant, with `Z`, explicit offsets, and no suffix. Winter and summer test dates both shifted seven hours in that session. Standalone assessment writes preserved the requested instant. This does not establish the upstream timezone or guarantee that its offset stays constant.
+Live testing found that `POST /assessmentsmobile/AddAssessmentAnswer` recorded effective dates seven hours earlier than the requested instant, with `Z`, explicit offsets, and no suffix. Winter and summer test dates both shifted seven hours in that session. Standalone assessment writes preserved the requested instant. The project maintainers report that WellSky servers run on Mountain Standard Time (UTC−7, no daylight saving), which matches the constant seven-hour shift and the UTC−7 DOB conversion. WellSky has not documented this as an API contract, so the SDK still does not infer the correction.
 
 For a deployment with a measured mobile shift, configure `mobileAssessmentDateCorrectionMinutes` on `WellSkyClient`. For example, **420 adds seven hours to the outgoing mobile query**, compensating for a verified upstream subtraction of seven hours. The default is unset and preserves raw behavior; the SDK never infers a correction from the host timezone or tenant name.
 
 With correction enabled, supply an ISO timestamp with `Z` or an explicit numeric offset. Invalid calendar dates, ambiguous timestamps, and correction values outside integer minutes from -840 to 840 are rejected before authentication/network activity. Only the mobile write's `dateEffective` query is corrected. Read queries, standalone/enrollment writes, and date values inside answer bodies are unchanged. Do not pre-adjust dates as well as configuring the client.
 
-Verify `date_effective` through a generic assessment read and check UI history after writes. Revalidate the correction when upstream behavior changes, including seasonal clock changes; it is a measured compatibility setting, not automatic timezone handling. Mobile reads can omit UI-visible combination answers, so an empty mobile answer alone does not prove absence. Standard standalone writes are preferable for scalar answers when that endpoint fits the application; mobile remains necessary for verified in-place recordset updates.
+Verify `date_effective` through a generic assessment read and check UI history after writes. Revalidate the correction when upstream behavior changes, including seasonal clock changes; it is a measured compatibility setting, not automatic timezone handling. Mobile reads can omit UI-visible combination answers, so an empty mobile answer alone does not prove absence. Standard standalone writes are preferable for scalar answers when that endpoint fits the application; mobile remains necessary for verified in-place recordset updates. Mobile scalar writes only insert a row for a question and date; see [yes/no answer acceptance](#yesno-answer-acceptance).
 
 ## Read verification records at enrollment
 
@@ -94,7 +110,9 @@ const result = await client.subassessments.setEndDate({
 });
 ```
 
-This is generic recordset handling. It reads the current row, targets its existing `recordset_id` with `isDeleted: false`, preserves the other returned values, and verifies the end date, preserved values, and recordset list. It never deletes/recreates the row or retries the write. The result is a `WriteResult`, including `unverified` if the server silently ignores the update. Rows containing provider questions are refused because mobile writes cannot preserve those values reliably.
+This is generic recordset handling. It reads the current row and sends only the end-date cell to its existing `recordset_id` with `isDeleted: false`. When the row has never had an end date, the cell's question comes from the parent's question list. It then verifies the end date, every other row and cell of the subassessment, and the recordset list. It never deletes/recreates the row or retries the write. The result is a `WriteResult`, including `unverified` if the server silently ignores the update or changes another value.
+
+On November 2, 2026, sandbox mobile updates that sent only the end-date cell kept the row's other answers, including provider-valued locations and yes/no answers that mobile cannot write itself, so rows with provider questions, such as Coordinated Entry Events, can be end-dated. Earlier versions resent every cell and refused those rows.
 
 An October 22, 2026 sandbox probe confirmed that an existing recordset could be end-dated in place and retained the same ID. Application policy decides when historical records should end or be replaced; the SDK verifies the requested operation.
 

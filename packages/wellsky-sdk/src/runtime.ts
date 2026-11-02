@@ -20,6 +20,10 @@ export interface ClientOptions {
    * Added to the requested instant on POST AddAssessmentAnswer only. No default timezone is assumed.
    * Revalidate against saved effective dates when the server's offset changes. */
   mobileAssessmentDateCorrectionMinutes?: number;
+  /** Opt in to retaining up to 16384 characters of an UpstreamError response body.
+   * May contain private data. Excluded from JSON serialization and ordinary telemetry.
+   * Authentication and throttle error bodies are never retained. */
+  captureErrorBody?: boolean;
   /** Defaults to the public production API URL. Supply the target environment explicitly when needed. */
   baseUrl?: string;
   /** Inject a fetch-compatible transport for tests or network routing. */
@@ -98,7 +102,7 @@ export function toItems<T>(response: ApiResponse<T>): T[] {
 
 export type ErrorKind = "http" | "network" | "timeout" | "aborted" | "validation" | "protocol" | "pagination" | "tenant_mismatch" | "auth" | "throttled" | "cooldown" | "ambiguous_commit" | "definition_drift" | "unknown_picklist_value";
 
-/** Deliberately contains no credentials, query values, response bodies, or client IDs. */
+/** Deliberately contains no credentials, query values, or client IDs, and no response body unless `captureErrorBody` is enabled (then non-enumerable). */
 export class WellSkyError extends Error {
   readonly kind: ErrorKind;
   readonly status: number | undefined;

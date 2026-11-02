@@ -28,6 +28,7 @@ Then read [REST configuration](rest-client.md) for authentication and tenant con
 | Record services, SSVF details, or Funding Sources | [Services](services.md), [SSVF rules](../SSVF.md) | [Service contract](../browser/service-recording.d.mts) |
 | Record a need without a service | [Independent needs](independent-needs.md) | [Need discovery and recording](../examples/independent-needs.mts) |
 | Record outreach or shelter contacts | [Current Living Situation](current-living-situation.md) | Program-entry starts, contact dates, and distinct event identities |
+| Record coordinated entry referrals and events | [Coordinated Entry Events](coordinated-entry-events.md) | [Event recording](../examples/coordinated-entry-events.mts) |
 | Understand shelter stays and enrollment coverage | [Shelters](shelters.md) | Household check-in/checkout, enrollment guards, and retry protection |
 | Report shelter inventory and vacancies | [Shelter inventory](shelter-inventory.md) | Unit lists, named beds, occupants, holds, overflow, and bounded complete snapshots |
 | Upload attachments or write goal case notes | [Files and notes](files-and-notes.md) | [Browser contracts](../browser/index.d.mts) |

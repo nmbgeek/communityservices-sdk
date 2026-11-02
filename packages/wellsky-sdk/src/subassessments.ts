@@ -80,17 +80,14 @@ export class SubassessmentEditor {
         const records = objectRows(parent.sub_assessment_answer_list ?? []);
         const selected = records.filter(r => r.recordset_id === input.recordsetId);
         if (selected.length !== 1 || !selected[0]) throw new ValidationError(operation, ["recordsetId"]);
-        const questions = objectRows(selected[0].sub_assessment_list ?? []);
-        const end = questions.filter(q => q.virt_field_name === input.endDateField && q.question_type === "date");
-        if (end.length !== 1 || typeof parent.question_id !== "number") throw new ValidationError(operation, [input.endDateField]);
-        const encoded = questions.filter(q => !["label", "blank"].includes(String(q.question_type))).flatMap(q => {
-          if (q.question_type === "provider") throw new ValidationError("mobile provider answers are unsupported", [String(q.virt_field_name)]);
-          if (typeof q.question_id !== "number" || typeof q.question_type !== "string" || typeof q.virt_field_name !== "string") throw new WellSkyError("protocol", readEndpoint);
-          const value = q.virt_field_name === input.endDateField ? input.endDate : q.answer_value ?? "";
-          if (typeof value !== "string") throw new WellSkyError("protocol", readEndpoint);
-          if (q.question_type === "yes_no" && value === "") return [];
-          return [{ question_id: q.question_id, question_type: q.question_type, virt_field_name: q.virt_field_name, answer_value: value }];
-        });
+        // A row read omits cells never answered, so fall back to the parent's question list.
+        const isEnd = (q: Record<string, unknown>) => q.virt_field_name === input.endDateField && q.question_type === "date" && typeof q.question_id === "number";
+        const inRow = objectRows(selected[0].sub_assessment_list ?? []).filter(isEnd);
+        const end = inRow.length ? inRow : objectRows(parent.sub_assessment_question_list ?? []).filter(isEnd);
+        if (end.length !== 1 || !end[0] || typeof parent.question_id !== "number") throw new ValidationError(operation, [input.endDateField]);
+        // Send only the end-date cell. Mobile updates the sent cells of the recordset and keeps the
+        // rest, including provider and yes/no answers it cannot write itself (live, November 2, 2026).
+        const encoded = [{ question_id: end[0].question_id as number, question_type: "date", virt_field_name: input.endDateField, answer_value: input.endDate }];
         Object.assign(expected, snapshot(parent, input.endDateField, calendarOnly));
         expected[`${input.recordsetId}/${input.endDateField}`] = dateValue(input.endDate, calendarOnly);
         body = [{ question_id: parent.question_id, question_type: "sub_assessment", virt_field_name: input.parentField, answer_value: "", subAssessmentQuestionAnswers: [{ recordset_id: input.recordsetId, isDeleted: false, subAssessments: encoded }] }];
