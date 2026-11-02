@@ -58,3 +58,10 @@ test('shared CLS journals isolate identical IDs and event keys across tenants an
  for(const recorder of recorders)assert.equal((await recorder.record(input)).outcome,'already-present');
  for(const f of [first,second,third])assert.equal(f.writes.length,1);
 });
+test('a contact dated after the server clock verifies through a read at its information date',async()=>{
+ const f=fixture(),get=f.api.assessments.get,future='2099-01-01T16:00:00Z';const queries=[];
+ // Live undated reads omit rows dated after the server's current time.
+ f.api.assessments.get=async args=>{queries.push(args.query?.dateEffective);const result=await get(args);if(!args.query)result[0].sub_assessment_answer_list=result[0].sub_assessment_answer_list.filter(r=>Date.parse(value(r,'INFO'))<=Date.now());return result;};
+ const r=await f.recorder().record({...input,key:'future',informationDate:future});
+ assert.equal(r.outcome,'verified');assert.equal(f.writes.length,1);assert.ok(queries.every(q=>q==='2099-01-01T16:00:01Z'));
+});

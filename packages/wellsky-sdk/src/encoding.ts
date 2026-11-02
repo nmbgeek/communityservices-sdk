@@ -102,8 +102,9 @@ export function encodeNewSubassessmentRow(parent: QuestionDefinition, answers: A
   const encoded = encodeAnswers(parent.children, answers, options);
   const included = new Set(encoded.map(q => q.virt_field_name));
   for (const question of parent.children) {
+    // An unanswered provider child is omitted; answered ones are still refused for mobile in encodeValue.
     if (!question.fieldName || included.has(question.fieldName) || ["label", "blank", "yes_no"].includes(question.questionType)) continue;
-    if (question.questionType === "provider" && options.endpoint === "mobile") throw new ValidationError("mobile provider answers are unsupported", [question.fieldName]);
+    if (question.questionType === "provider" && options.endpoint === "mobile") continue;
     encoded.push({ question_id: question.questionId, question_type: question.questionType, virt_field_name: question.fieldName, answer_value: "" });
   }
   return { subAssessments: encoded };

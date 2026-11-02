@@ -1,5 +1,5 @@
 import type {DateOfBirth} from './date-of-birth.mjs';
-import type {Answers, AssessmentDefinition, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
+import type {Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
 import type {UiMutationStore,EnrollmentReader} from './index.mjs';
 import type {ProviderAssessmentItem, ProgramDiscovery} from './program-discovery.mjs';
 import type {HouseholdExitUi,HouseholdExitDetailInput} from './household-exit.mjs';
@@ -170,10 +170,18 @@ export interface EnrollmentWorkflowOptions {
   exitUi?:HouseholdExitUi;
   /** Required to set the later entry date for newly attached household members. */
   memberEntryDatePort?:MemberEntryDatePort;
+  /** Default `mobile` keeps yes/no answers in the mobile scalar batch, which can store them empty.
+   * `standard` writes them through `assessments.create` with every mandatory answer, after the mobile scalars;
+   * every mandatory question must be a lookup. An unfinished journal never reconciles in the other mode. */
+  yesNoWrites?:'mobile'|'standard';
+  /** Required for `yesNoWrites: 'standard'`: tenant-verified labels for mandatory lookup answers. */
+  writeLabel?:EncodingOptions['writeLabel'];
 }
 export class EnrollmentWorkflowError extends Error {
   readonly reason:string;
-  constructor(reason:string);
+  /** Failed durable stage, when known. The original write error is available as cause in memory. */
+  readonly step?:string;
+  constructor(reason:string,options?:ErrorOptions&{step?:string});
 }
 /** Tenant-configured. Retain stable keys and one durable store for all cooperating writers.
  * A partial or uncertain write requires reconciliation; no automatic write replay occurs. */

@@ -210,7 +210,7 @@ test('generic end-date update keeps the recordset and verifies every returned fi
   client.fake.set('GET /assessmentsmobile/GetAssessmentAnswers/{clientId}/{assessmentCode}', { kind: 'handler', handle: () => ({ body: state }) });
   client.fake.set('POST /assessmentsmobile/AddAssessmentAnswer/{clientId}/{assessmentCode}', { kind: 'handler', handle: request => {
     const write = request.body[0].subAssessmentQuestionAnswers[0];
-    assert.equal(write.recordset_id, 42); assert.equal(write.isDeleted, false);
+    assert.equal(write.recordset_id, 42); assert.equal(write.isDeleted, false); assert.equal(write.subAssessments.length, 1);
     state[1].sub_assessment_answer_list[0].sub_assessment_list.find(q => q.virt_field_name === 'END').answer_value = write.subAssessments.find(q => q.virt_field_name === 'END').answer_value;
     return { status: 400 }; // Deliberately reproduce partial-commit semantics.
   } });
@@ -251,4 +251,49 @@ test('impossible calendar end dates fail before any API request', async () => {
   const client = createFakeWellSkyClient();
   const result = await client.subassessments.setEndDate({ ...context, parentField: 'ROWS', recordsetId: 42, endDateField: 'END', endDate: '2026-02-30' });
   assert.equal(result.status, 'failed'); assert.equal(result.reason, 'preflight'); assert.equal(client.fake.calls.length, 0);
+});
+
+test('mobile row encoding omits an unanswered provider child and still refuses an answered one', () => {
+  const child = (fieldName, questionType, questionId) => ({ questionId, fieldName, questionType, description: fieldName, displayOrder: questionId, mandatory: false, showOnPrevious: true, picklistId: null, options: [], children: [] });
+  const parent = { ...child('EVENTS', 'sub_assessment', 1), children: [child('START', 'date', 2), child('LOCATION', 'provider', 3)] };
+  const row = encodeNewSubassessmentRow(parent, { START: { value: '2026-10-20T12:00:00Z' } }, { endpoint: 'mobile' });
+  assert.deepEqual(row.subAssessments.map(q => q.virt_field_name), ['START']);
+  assert.throws(() => encodeNewSubassessmentRow(parent, { START: { value: '2026-10-20T12:00:00Z' }, LOCATION: { value: 9001 } }, { endpoint: 'mobile' }), /mobile provider answers are unsupported/);
+});
+
+test('end-dating sends only the end cell, keeps provider and yes/no answers, and finds an unanswered end question', async () => {
+  const client = createFakeWellSkyClient();
+  const state = [{ question_id: 20, virt_field_name: 'EVENTS', question_type: 'sub_assessment', sub_assessment_question_list: [
+    { question_id: 21, virt_field_name: 'START', question_type: 'date' }, { question_id: 22, virt_field_name: 'END', question_type: 'date' },
+    { question_id: 23, virt_field_name: 'LOCATION', question_type: 'provider' }, { question_id: 24, virt_field_name: 'HOUSED', question_type: 'yes_no' },
+  ], sub_assessment_answer_list: [{ recordset_id: 7, sub_assessment_list: [
+    { question_id: 21, virt_field_name: 'START', question_type: 'date', answer_value: '2026-11-01 09:00:00-07' },
+    { question_id: 23, virt_field_name: 'LOCATION', question_type: 'provider', answer_value: '9001' },
+    { question_id: 24, virt_field_name: 'HOUSED', question_type: 'yes_no', answer_value: 'No' },
+  ] }] }];
+  client.fake.set('GET /assessmentsmobile/GetAssessmentAnswers/{clientId}/{assessmentCode}', { kind: 'handler', handle: () => ({ body: structuredClone(state) }) });
+  client.fake.set('POST /assessmentsmobile/AddAssessmentAnswer/{clientId}/{assessmentCode}', { kind: 'handler', handle: request => {
+    const write = request.body[0].subAssessmentQuestionAnswers[0];
+    assert.equal(write.recordset_id, 7);
+    assert.deepEqual(write.subAssessments, [{ question_id: 22, question_type: 'date', virt_field_name: 'END', answer_value: '2026-11-02T17:00:00Z' }]);
+    state[0].sub_assessment_answer_list[0].sub_assessment_list.push({ question_id: 22, virt_field_name: 'END', question_type: 'date', answer_value: '2026-11-02 10:00:00-07' });
+    return { body: {} };
+  } });
+  const result = await client.subassessments.setEndDate({ ...context, parentField: 'EVENTS', recordsetId: 7, endDateField: 'END', endDate: '2026-11-02T17:00:00Z' });
+  assert.equal(result.status, 'verified');
+  assert.equal(result.evidence.fields['7/LOCATION'], 'match'); assert.equal(result.evidence.fields['7/HOUSED'], 'match');
+});
+
+test('an end-date update that clears another answer is not verified', async () => {
+  const client = createFakeWellSkyClient();
+  const state = structuredClone(mobile);
+  client.fake.set('GET /assessmentsmobile/GetAssessmentAnswers/{clientId}/{assessmentCode}', { kind: 'handler', handle: () => ({ body: structuredClone(state) }) });
+  client.fake.set('POST /assessmentsmobile/AddAssessmentAnswer/{clientId}/{assessmentCode}', { kind: 'handler', handle: request => {
+    const cells = state[1].sub_assessment_answer_list[0].sub_assessment_list;
+    cells.find(q => q.virt_field_name === 'END').answer_value = request.body[0].subAssessmentQuestionAnswers[0].subAssessments[0].answer_value;
+    cells.find(q => q.virt_field_name === 'CONFIRMED').answer_value = null;
+    return { body: {} };
+  } });
+  const result = await client.subassessments.setEndDate({ ...context, parentField: 'ROWS', recordsetId: 42, endDateField: 'END', endDate: '2026-10-21' });
+  assert.notEqual(result.status, 'verified');
 });

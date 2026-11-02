@@ -43,6 +43,31 @@ Successful adoption of an existing record also needs its journal. Retain it even
 
 Not every browser helper error is a `WellSkyError`; some validation/UI failures are ordinary `Error` objects. `verifyWrite` returns a discriminated result rather than using a thrown error as its success contract. Its `unverified` result may already be committed.
 
+## Inspect an upstream error privately
+
+By default the transport discards HTTP error bodies because they can contain client data or credentials. For a controlled diagnostic session, construct `WellSkyClient` with `captureErrorBody: true`. An `UpstreamError` then exposes `responseBody` and `responseBodyTruncated`. The body is capped at 16,384 characters, retained in memory, and excluded from the error's enumerable properties, JSON serialization, and transport hooks/logger events. HTTP 401, 403, 429 and SetAuthKey authentication responses are excluded even with capture enabled. Raw bodies can still contain private information; inspect them through an access-controlled debugger or application diagnostic sink, not ordinary logs.
+
+For an enrollment write that fails and cannot be verified, `EnrollmentWorkflowError.step` identifies the durable stage and `cause` preserves the original write error. If the post-write reconciliation read also fails, `cause` is an `AggregateError` containing the write and read errors. Causes and response bodies are not written to the durable journal and are not recoverable from a later process or retry. A write that verifies successfully remains successful even if its response reported failure.
+
+```ts
+import {UpstreamError} from '@choiceapps/communityservices-sdk';
+import {EnrollmentWorkflowError} from '@choiceapps/communityservices-sdk/browser';
+
+// api was constructed with captureErrorBody: true for this diagnostic session.
+try {
+  await workflow.createEnrollment(originalInput);
+} catch (error) {
+  const upstream = error instanceof EnrollmentWorkflowError ? error.cause : error;
+  if (upstream instanceof UpstreamError) {
+    // Inspect upstream.status, requestId, correlationId, responseBody and
+    // responseBodyTruncated privately. Sanitize before sharing any excerpt.
+  }
+  throw error;
+}
+```
+
+Enabling capture does not authorize another write or recover an already discarded body. A previously attempted stage only reconciles on retry; it does not submit again to obtain diagnostics. Preserve the original journal and arrange a separately authorized, minimal reproduction when a new response is needed. Never switch to another endpoint after an uncertain mutation merely to see whether it succeeds.
+
 ## Check unexpected values
 
 - Empty complete-enrollment verification arrays: use [assessment-based snapshots](assessments.md#read-verification-records-at-enrollment). Do not shift stored dates.

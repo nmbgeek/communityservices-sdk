@@ -38,4 +38,6 @@ Installed checks also run the client-creation, attachment-retry, session-authent
 
 `independent-needs.mts` discovers tenant-wide service types and separate provider quicklists, records explicit PIT needs, and maps a chosen taxonomy type to the service recorder. Dependencies, event keys, provider, and selections are supplied by the application.
 
+[coordinated-entry-events.mts](coordinated-entry-events.mts) records application-supplied Coordinated Entry Events with durable keys, verified lookup labels, and event-specific follow-up answers such as referral locations and results. It compiles against the installed package without opening a live session.
+
 [current-living-situation.mts](current-living-situation.mts) records application-supplied outreach or night-by-night shelter contact events with distinct durable keys and optional recording-program picklist selections. It compiles and imports against the installed package without opening a live session.

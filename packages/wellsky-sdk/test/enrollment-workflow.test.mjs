@@ -31,7 +31,8 @@ function fixture(faults={}) {
   };
   const readAnswers=at=>metadata.map(q=>{
     if(q.questionType==='sub_assessment')return {virt_field_name:q.fieldName,question_type:q.questionType,sub_assessment_answer_list:structuredClone(rows)};
-    const found=history.filter(h=>h.field===q.fieldName&&(!at||Date.parse(h.date)<=Date.parse(at))).at(-1);
+    // Live generic reads omit yes/no answers saved at exactly the queried instant.
+    const found=history.filter(h=>h.field===q.fieldName&&(!at||(q.questionType==='yes_no'?Date.parse(h.date)<Date.parse(at):Date.parse(h.date)<=Date.parse(at)))).at(-1);
     return {virt_field_name:q.fieldName,question_type:q.questionType,answer_value:found?.value??null,date_effective:found?.date.replace(/Z$/,'')??null};
   });
   const api={
@@ -45,6 +46,12 @@ function fixture(faults={}) {
     assessments:{
       async getDefinition({assessmentCode,effectiveDate}){return {tenant:api.tenant,assessmentCode,effectiveDate,retrievedAt:new Date().toISOString(),picklistEffectiveDate:'current',questions:structuredClone(metadata),unresolvedPicklists:[]};},
       async get({query}){return readAnswers(query?.dateEffective);},
+      async create({body,query}){
+        counts.standard=(counts.standard??0)+1;if(faults.noStandardCommit)throw Error('Standard write failed without acknowledgement');
+        const missing=metadata.filter(q=>q.mandatory&&!body.some(b=>b.virt_field_name===q.fieldName));if(missing.length)throw Error('All mandatory answers are not provided');
+        for(const q of body){const meta=metadata.find(m=>m.fieldName===q.virt_field_name),value=q.answer_value===''?null:meta.questionType==='lookup'?String(meta.options.find(o=>o.name===q.answer_value).id):q.answer_value;history.push({field:q.virt_field_name,value,date:query.dateEffective});}
+        if(faults.lostStandardResponse)throw Error('Response lost after commit');return {success:true};
+      },
     },
     assessmentsMobile:{async addAnswer({body,query}){
       const isRows=body.some(q=>q.question_type==='sub_assessment');counts[isRows?'rows':'scalars']++;
@@ -60,7 +67,7 @@ function fixture(faults={}) {
   };
   const discovery={async getProviderAssessments({providerId}){return {providerId,defaults:['entry','interim'].map((phase,index)=>({location:index?'showHudInterim':'showHudEntry',resolution:'resolved',assessment:{assessmentId:index+1,code:phase.toUpperCase(),name:phase,assignedToAssessmentTab:true}}))};}};
   const helpers={async createInterimUpdate(input){if(!reviews.some(r=>r.reviewDate===input.reviewDate)){counts.review++;reviews.push({reviewId:60,type:'Update',reviewDate:input.reviewDate,clientIds:[input.clientId]});}return {outcome:'reconciled',snapshot:{reviews:structuredClone(reviews)}};}};
-  return {api,store,discovery,helpers,entries,reviews,rows,history,journal,counts,metadata,workflow:()=>createEnrollmentWorkflow({api,store,discovery,helpers})};
+  return {api,store,discovery,helpers,entries,reviews,rows,history,journal,counts,metadata,workflow:(options={})=>createEnrollmentWorkflow({api,store,discovery,helpers,...options})};
 }
 
 test('entry discovers configured instruments and reuses all writes across helper replacement',async()=>{
@@ -79,6 +86,49 @@ test('unknown enrollment outcome blocks retry and any other unfinished workflow'
   await assert.rejects(f.workflow().createEnrollment(entryInput()),/uncertain write/);
   await assert.rejects(f.workflow().createEnrollment({...entryInput(),key:'another'}),/unfinished workflow/);
   assert.equal(f.counts.enrollment,1);assert.equal(f.counts.scalars,0);
+});
+test('failed yes/no scalar writes preserve their HTTP cause and remain pending without retry or endpoint fallback',async()=>{
+ const f=fixture();f.metadata.push(question(9,'SYNTHETIC_YES_NO','yes_no'));
+ const input=entryInput();input.assessment.answers.SYNTHETIC_YES_NO={value:true};
+ const {WellSkyClient}=await import('@choiceapps/communityservices-sdk');
+ let writes=0,standardWrites=0;const payloads=[];
+ const transport=new WellSkyClient({tenant:testTenant,auth:{kind:'none'},captureErrorBody:true,fetch:async(_url,init)=>{writes++;payloads.push(JSON.parse(init.body));return new Response('{"message":"Synthetic yes/no failure"}',{status:400,headers:{'x-request-id':'synthetic-request'}});}});
+ f.api.assessmentsMobile.addAnswer=transport.assessmentsMobile.addAnswer;
+ f.api.assessments.create=async()=>{standardWrites++;};
+ await assert.rejects(f.workflow().createEnrollment(input),error=>{
+  assert.equal(error.name,'EnrollmentWorkflowError');assert.equal(error.reason,'uncertain write requires reconciliation');assert.equal(error.step,'scalars');
+  assert.equal(error.cause.name,'UpstreamError');assert.equal(error.cause.status,400);assert.equal(error.cause.requestId,'synthetic-request');
+  assert.equal(error.cause.responseBody,'{"message":"Synthetic yes/no failure"}');
+  assert.ok(!JSON.stringify(error).includes('Synthetic yes/no failure'));return true;
+ });
+ assert.equal(payloads[0].find(q=>q.virt_field_name==='SYNTHETIC_YES_NO').answer_value,'Yes');
+ assert.equal((await f.workflow().getStatus({clientId:1,key:input.key})).stage,'pending');
+ assert.ok(!JSON.stringify([...f.journal]).includes('Synthetic yes/no failure'));
+ await assert.rejects(f.workflow().createEnrollment(input),error=>error.step==='scalars'&&error.reason==='uncertain write requires reconciliation');
+ assert.equal(writes,1);assert.equal(standardWrites,0);assert.equal(f.counts.enrollment,1);
+});
+test('a committed write that returned an error still reconciles as verified',async()=>{
+ const f=fixture({lostScalarResponse:true});const result=await f.workflow().createEnrollment(entryInput());
+ assert.equal(result.outcome,'verified');assert.equal(f.counts.scalars,1);
+});
+test('thirty silently discarded yes/no answers never mark an enrollment complete or resend its scalar batch',async()=>{
+ const f=fixture(),input=entryInput(),submit=f.api.assessmentsMobile.addAnswer;
+ for(let i=0;i<30;i++){const field=`SYNTHETIC_YES_NO_${i}`;f.metadata.push(question(10+i,field,'yes_no'));input.assessment.answers[field]={value:i%2===0};}
+ let calls=0;
+ f.api.assessmentsMobile.addAnswer=async args=>{calls++;assert.equal(args.body.filter(q=>q.question_type==='yes_no').length,30);return submit({...args,body:args.body.filter(q=>q.question_type!=='yes_no')});};
+ await assert.rejects(f.workflow().createEnrollment(input),error=>error.step==='scalars'&&error.reason==='uncertain write requires reconciliation');
+ const status=await f.workflow().getStatus({clientId:1,key:input.key});assert.equal(status.stage,'pending');
+ assert.equal(status.steps.find(s=>s.name==='scalars').state,'attempted');
+ await assert.rejects(f.workflow().createEnrollment(input),/uncertain write requires reconciliation/);
+ assert.equal(calls,1);assert.equal(f.counts.enrollment,1);assert.equal(f.counts.rows,0);
+});
+test('a failed write and failed reconciliation preserve both causes without replay',async()=>{
+ const f=fixture(),writeError=new Error('Synthetic write failure'),readError=new Error('Synthetic read failure');let attempted=false,writes=0;
+ const get=f.api.assessments.get;
+ f.api.assessments.get=async args=>{if(attempted)throw readError;return get(args);};
+ f.api.assessmentsMobile.addAnswer=async()=>{attempted=true;writes++;throw writeError;};
+ await assert.rejects(f.workflow().createEnrollment(entryInput()),error=>error.step==='scalars'&&error.cause instanceof AggregateError&&error.cause.errors[0]===writeError&&error.cause.errors[1]===readError);
+ assert.equal(writes,1);
 });
 test('partial subassessment commit blocks batch replay and preserves confirmed earlier steps',async()=>{
   const f=fixture({partialRows:true});await assert.rejects(f.workflow().createEnrollment(entryInput()),/uncertain write/);
@@ -299,4 +349,76 @@ for(const qualityCode of ['DOBTYPE_DONTKNOW','DOBTYPE_REFUSED'])for(const lostSc
  const before=structuredClone(f.counts);assert.equal((await f.workflow().createEnrollment(i)).outcome,'already-present');assert.equal((await f.workflow().createInterim(review)).outcome,'already-present');assert.deepEqual(f.counts,before);
  assert.equal(f.history.filter(h=>h.field==='SVPPROFDOB').length,0);assert.deepEqual(f.history.filter(h=>h.field==='SVPPROFDOBTYPE').map(h=>h.value),[qualityCode==='DOBTYPE_DONTKNOW'?'91':'92']);assert.equal(f.counts.enrollment,1);
  const changed=structuredClone(i);changed.assessment.answers.SVPPROFDOBTYPE={option:{code:qualityCode==='DOBTYPE_DONTKNOW'?'DOBTYPE_REFUSED':'DOBTYPE_DONTKNOW'}};await assert.rejects(f.workflow().createEnrollment(changed),/key.*different|intent/i);assert.deepEqual(f.counts,before);
+});
+const standardFixture=(faults)=>{
+ const f=fixture(faults),input=entryInput();
+ f.metadata.push(question(40,'RELATION','lookup',{mandatory:true,options:[option(31,'SELF'),option(32,'CHILD')]}),question(41,'SUBSIDY','lookup',{mandatory:true,options:[option(33,'GPD')]}));
+ input.assessment.answers.RELATION={option:{code:'SELF'}};input.assessment.notApplicable.SUBSIDY='Not applicable to this synthetic scenario';
+ for(let i=0;i<30;i++){const field=`SYNTHETIC_YES_NO_${i}`;f.metadata.push(question(50+i,field,'yes_no'));input.assessment.answers[field]={value:i%2===0};}
+ const labels=[];const writeLabel=(q,o)=>{labels.push(q.fieldName);return o.name;};
+ const mobileBodies=[],standardBodies=[],submit=f.api.assessmentsMobile.addAnswer,create=f.api.assessments.create;
+ f.api.assessmentsMobile.addAnswer=args=>{mobileBodies.push(args.body);return submit(args);};
+ f.api.assessments.create=args=>{standardBodies.push(args.body);return create(args);};
+ return {...f,input,labels,mobileBodies,standardBodies,standard:()=>f.workflow({yesNoWrites:'standard',writeLabel})};
+};
+test('standard yes/no mode writes yes/no with mandatory answers after mobile scalars and verifies one second after the instant',async()=>{
+ const f=standardFixture(),result=await f.standard().createEnrollment(f.input);
+ assert.equal(result.outcome,'verified');
+ assert.ok(f.mobileBodies.flat().every(q=>q.question_type!=='yes_no'));
+ assert.equal(f.standardBodies.length,1);const body=f.standardBodies[0];
+ assert.equal(body.filter(q=>q.question_type==='yes_no').length,30);
+ assert.equal(body.find(q=>q.virt_field_name==='SYNTHETIC_YES_NO_0').answer_value,'Yes');assert.equal(body.find(q=>q.virt_field_name==='SYNTHETIC_YES_NO_1').answer_value,'No');
+ assert.equal(body.find(q=>q.virt_field_name==='RELATION').answer_value,'SELF');assert.equal(body.find(q=>q.virt_field_name==='SUBSIDY').answer_value,'');
+ assert.ok(body.every(q=>!('expected' in q)&&!('carry' in q)));
+ const status=await f.standard().getStatus({clientId:1,key:f.input.key});assert.equal(status.steps.find(s=>s.name==='yesno').state,'verified');
+ assert.equal((await f.standard().createEnrollment(f.input)).outcome,'already-present');assert.equal(f.standardBodies.length,1);assert.equal(f.counts.scalars,1);
+});
+test('standard yes/no lost acknowledgement reconciles; an unknown outcome stays pending without retry or mobile fallback',async()=>{
+ const lost=standardFixture({lostStandardResponse:true});assert.equal((await lost.standard().createEnrollment(lost.input)).outcome,'verified');assert.equal(lost.standardBodies.length,1);
+ const f=standardFixture({noStandardCommit:true});
+ await assert.rejects(f.standard().createEnrollment(f.input),error=>error.step==='yesno'&&error.reason==='uncertain write requires reconciliation'&&/without acknowledgement/.test(error.cause.message));
+ await assert.rejects(f.standard().createEnrollment(f.input),error=>error.step==='yesno');
+ assert.equal(f.standardBodies.length,1);assert.ok(f.mobileBodies.flat().every(q=>q.question_type!=='yes_no'));
+ await assert.rejects(f.workflow().createEnrollment(f.input),/yes\/no write mode changed/);assert.equal(f.mobileBodies.length,1);
+});
+test('standard yes/no mode cannot reconcile a journal started in mobile mode',async()=>{
+ const f=standardFixture(),submit=f.api.assessmentsMobile.addAnswer;
+ f.api.assessmentsMobile.addAnswer=args=>submit({...args,body:args.body.filter(q=>q.question_type!=='yes_no')});
+ await assert.rejects(f.workflow().createEnrollment(f.input),error=>error.step==='scalars');
+ await assert.rejects(f.standard().createEnrollment(f.input),/yes\/no write mode changed/);
+ assert.equal(f.standardBodies.length,0);assert.equal(f.counts.enrollment,1);
+});
+test('standard yes/no mode resolves every mandatory label before any write',async()=>{
+ const f=standardFixture();
+ assert.throws(()=>f.workflow({yesNoWrites:'standard'}),/writeLabel/);assert.throws(()=>f.workflow({yesNoWrites:'Standard',writeLabel:()=>'x'}),/yesNoWrites/);
+ await assert.rejects(f.workflow({yesNoWrites:'standard',writeLabel:()=>undefined}).createEnrollment(f.input),/write label/);
+ assert.equal(f.counts.enrollment,0);assert.equal(f.mobileBodies.length+f.standardBodies.length,0);
+ f.history.push({field:'SUBSIDY',value:'33',date:'2026-10-01T16:00:00Z'});
+ await assert.rejects(f.standard().createEnrollment(f.input),/SUBSIDY has a recorded value/);
+ assert.equal(f.counts.enrollment,0);assert.equal(f.mobileBodies.length+f.standardBodies.length,0);
+});
+test('standard yes/no mode resends a carried mandatory lookup by its verified label',async()=>{
+ const f=standardFixture();delete f.input.assessment.answers.RELATION;f.input.assessment.carryForward=['RELATION'];
+ f.history.push({field:'RELATION',value:'31',date:'2026-10-01T16:00:00Z'});
+ await f.standard().createEnrollment(f.input);
+ assert.equal(f.standardBodies[0].find(q=>q.virt_field_name==='RELATION').answer_value,'SELF');assert.ok(f.labels.includes('RELATION'));
+});
+test('standard yes/no mode rejects non-lookup mandatory questions, including DOB, and missing carried labels before any write',async()=>{
+ const f=standardFixture();f.metadata.push(question(42,'SVPPROFDOB','date',{mandatory:true}));f.input.assessment.notApplicable.SVPPROFDOB='Unknown in this synthetic scenario';
+ await assert.rejects(f.standard().createEnrollment(f.input),/mandatory lookups only; SVPPROFDOB is date/);
+ const g=standardFixture();delete g.input.assessment.answers.RELATION;g.input.assessment.carryForward=['RELATION'];g.history.push({field:'RELATION',value:'31',date:'2026-10-01T16:00:00Z'});
+ await assert.rejects(g.workflow({yesNoWrites:'standard',writeLabel:q=>q.fieldName==='RELATION'?undefined:'x'}).createEnrollment(g.input),/carried mandatory answer RELATION has no verified write label/);
+ for(const x of [f,g]){assert.equal(x.counts.enrollment,0);assert.equal(x.mobileBodies.length+x.standardBodies.length,0);}
+});
+test('a verified mobile-mode workflow without yes/no answers stays idempotent in standard mode',async()=>{
+ const f=fixture();assert.equal((await f.workflow().createEnrollment(entryInput())).outcome,'verified');
+ assert.equal((await f.workflow({yesNoWrites:'standard',writeLabel:(_q,o)=>o.name}).createEnrollment(entryInput())).outcome,'already-present');
+ assert.equal(f.counts.scalars,1);assert.equal(f.counts.standard,undefined);
+});
+test('rows dated after the server clock verify through a read at the assessment date',async()=>{
+ const f=fixture(),get=f.api.assessments.get,input=entryInput();input.entryDate='2099-01-01T16:00:00Z';input.assessment.subassessments=[row('a','A','2099-01-01T16:00:00Z')];
+ // Live undated reads omit rows dated after the server's current time.
+ f.api.assessments.get=async args=>{const result=await get(args);if(!args.query)for(const q of result)if(q.sub_assessment_answer_list)q.sub_assessment_answer_list=q.sub_assessment_answer_list.filter(r=>Date.parse(r.sub_assessment_list[0].date_effective+'Z')<=Date.now());return result;};
+ const result=await f.workflow().createEnrollment(input);
+ assert.equal(result.outcome,'verified');assert.equal(f.counts.rows,1);
 });

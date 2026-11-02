@@ -32,6 +32,35 @@ test('sparse expected fields fail before submission, and sparse readback cannot 
 
 for (const Client of [WellSkyClient, V2Client]) {
   const version = Client === V2Client ? 'V2' : 'V3';
+  test(`${version}: private HTTP error bodies are opt-in, bounded and excluded from serialization and telemetry`, async () => {
+    const privateBody='PRIVATE_SYNTHETIC_ERROR '+ 'x'.repeat(17000);
+    for(const captureErrorBody of [undefined,false,true]){
+      const events=[];let calls=0;
+      const client=new Client({...config,...(captureErrorBody===undefined?{}:{captureErrorBody}),logger:event=>events.push(event),fetch:async()=>{calls++;return new Response(privateBody,{status:400,headers:{'x-request-id':'synthetic-request'}});}});
+      await assert.rejects(client.assessmentsMobile.addAnswer({path:{clientId:123,assessmentCode:'SYNTHETIC'},body:[{question_id:1,question_type:'yes_no',virt_field_name:'SYNTHETIC_YES_NO',answer_value:'Yes'}]}),error=>{
+        assert.equal(error.name,'UpstreamError');assert.equal(error.status,400);assert.equal(error.requestId,'synthetic-request');assert.equal(typeof error.correlationId,'string');
+        assert.equal(error.responseBody,captureErrorBody===true?privateBody.slice(0,16384):undefined);
+        assert.equal(error.responseBodyTruncated,captureErrorBody===true?true:undefined);
+        assert.ok(!JSON.stringify(error).includes('PRIVATE_SYNTHETIC_ERROR'));assert.ok(!error.message.includes('PRIVATE_SYNTHETIC_ERROR'));
+        assert.ok(!JSON.stringify(events).includes('PRIVATE_SYNTHETIC_ERROR'));return true;
+      });
+      assert.equal(calls,1);
+    }
+  });
+  test(`${version}: auth and throttle response bodies remain discarded with diagnostic capture enabled`, async () => {
+    for(const status of [401,403,429]){
+      const client=new Client({...config,captureErrorBody:true,fetch:async()=>new Response('PRIVATE_SYNTHETIC_ERROR',{status})});
+      await assert.rejects(client.assessmentsMobile.addAnswer({path:{clientId:123,assessmentCode:'SYNTHETIC'},body:[]}),error=>error.status===status&&error.responseBody===undefined);
+    }
+    const client=new Client({...config,auth:{kind:'credentials',username:'synthetic',password:'synthetic'},captureErrorBody:true,fetch:async()=>new Response('PRIVATE_SYNTHETIC_AUTH_ERROR',{status:500})});
+    await assert.rejects(client.clients.list(),error=>error.status===500&&error.responseBody===undefined&&!JSON.stringify(error).includes('PRIVATE_SYNTHETIC_AUTH_ERROR'));
+  });
+  test(`${version}: untruncated JSON and non-JSON error bodies remain available without parsing assumptions`, async () => {
+    for(const body of ['{"message":"Synthetic validation failed"}','Synthetic non-JSON failure','']){
+      const client=new Client({...config,captureErrorBody:true,fetch:async()=>new Response(body,{status:400})});
+      await assert.rejects(client.clients.list(),error=>error.responseBody===body&&error.responseBodyTruncated===false);
+    }
+  });
   test(`${version}: counted responses retain their envelope and normalize to records`, async () => {
     const body = { count: 1, values: [{ clientId: 123 }] };
     const client = new Client({ ...config, fetch: async () => Response.json(body) });
