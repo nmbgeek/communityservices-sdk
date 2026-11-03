@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-11-03
 
 - Compare journaled attachment and case-note intents, and shelter stay identities, by canonical hash instead of key-order-sensitive JSON, so an identical retry no longer conflicts when a store such as Postgres `jsonb` reorders keys. Existing journals remain valid.
 - Add an optional `enrollmentSession` reader to `createCurrentLivingSituationRecorder` and `createCoordinatedEntryEventRecorder`. It reads the enrollment through GWT, so clients in household enrollments, whose REST enrollment reads fail with `42703`, can be recorded. Journal hashes match the REST path.
