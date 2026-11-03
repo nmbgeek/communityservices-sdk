@@ -86,13 +86,13 @@ function compile(definition, fields, input, entryDate, tenant, writeLabel) {
 /** One new CE Event recordset per event key, written through the standard assessment endpoint,
  * which keeps provider and yes/no answers that mobile writes drop. Follow-up answers are
  * checked against the selected Event. */
-export function createCoordinatedEntryEventRecorder({api, store, fields: mapping, writeLabel}) {
+export function createCoordinatedEntryEventRecorder({api, store, fields: mapping, writeLabel, enrollmentSession}) {
     if (!store?.withLock || !store?.read || !store?.write || typeof api?.assessments?.create !== 'function') fail('api-and-store-required');
     if (typeof writeLabel !== 'function') fail('write-label-required');
     exactFields(mapping, roles);
     const fields = structuredClone(mapping);
     if (roles.some(role => !nonempty(fields[role])) || new Set(Object.values(fields)).size !== roles.length) fail('invalid-field-mapping');
-    const recorder = createRowRecorder({api, store, fail, kind: 'coordinated-entry-event', noun: 'event', dateKey: 'eventDate', parentField: fields.parentField, normalize,
+    const recorder = createRowRecorder({api, store, enrollmentSession, fail, kind: 'coordinated-entry-event', noun: 'event', dateKey: 'eventDate', parentField: fields.parentField, normalize,
         compile(definition, input, enrollment) {
             const {parent, sent, stored} = compile(definition, fields, input, enrollment.entryDate, api.tenant, writeLabel);
             // Hash option IDs, not labels, so a relabelled option does not invalidate verified keys.

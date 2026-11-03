@@ -173,3 +173,10 @@ test('an event end-dated after it was recorded is still already present',async()
  f.rows[0].sub_assessment_list.push({question_id:2,question_type:'date',virt_field_name:'END',answer_value:'2026-10-30 10:00:00-07'});
  assert.equal((await f.recorder().record(input)).outcome,'already-present');assert.equal(f.writes.length,1);
 });
+test('an enrollment session records events for household enrollments that the REST list cannot read',async()=>{
+ const f=fixture(),reads=[];f.api.enrollments.listForClient=async()=>{throw Object.assign(Error('42703: column v.entry_date_effective does not exist'),{status:400});};
+ const enrollmentSession={readEnrollment:async target=>{reads.push(target);return {source:'gwt-rpc',tenant:testTenant,clientId:1,enrollmentId:10,projectStartDate:'2026-10-20T12:00:00.000Z',providerId:20,enrollmentType:'HUD',members:[{clientId:1,enrollmentId:10}],exits:[{clientId:1,enrollmentId:10,projectExitDate:null}],reviews:[]};}};
+ const recorder=()=>createCoordinatedEntryEventRecorder({api:f.api,store:f.store,fields,writeLabel,enrollmentSession});
+ const r=await recorder().record(input);assert.equal(r.outcome,'verified');assert.equal(r.startDate,'2026-10-20T12:00:00.000Z');assert.deepEqual(reads,[{clientId:1,enrollmentId:10}]);
+ assert.equal((await recorder().record(input)).outcome,'already-present');assert.equal(f.writes.length,1);
+});

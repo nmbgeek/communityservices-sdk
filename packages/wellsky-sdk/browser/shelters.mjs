@@ -1,6 +1,6 @@
 import {apiScope} from './connection.mjs';
 import { createHash } from 'node:crypto';
-import { toItems } from '../dist/esm/index.js';
+import { toItems, semanticHash } from '../dist/esm/index.js';
 const hash = v => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const id = v => {
     if (!Number.isSafeInteger(v) || v < 1)
@@ -75,7 +75,7 @@ export function createShelters({ api, ui, store, enrollmentHelpers }) {
                 fail('stay-identity-changed');
             return { serviceId: r.serviceId, clientId: r.clientId, bedId: r.bedId, unitListId: r.unitListId };
         }).sort((a, b) => a.serviceId - b.serviceId);
-        if (record.identities && JSON.stringify(normalized) !== JSON.stringify(record.identities))
+        if (record.identities && await semanticHash(normalized) !== await semanticHash(record.identities))
             fail('stay-identity-changed');
         record.identities = normalized;
     };

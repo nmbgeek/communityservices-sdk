@@ -8,7 +8,7 @@ A Coordinated Entry Event records an access event, such as a referral to a crisi
 
 ## Fields
 
-Read `api.assessments.getDefinition({clientId, assessmentCode, refresh: true})` and supply the exact virtual fields. Readback queries one second after the later of now and the event date, because a read at exactly the event instant omits yes/no answers. A November 2, 2026 sandbox instrument exposed:
+Read `api.assessments.getDefinition({clientId, assessmentCode, refresh: true})` and supply the exact virtual fields. For clients in household enrollments, pass `enrollmentSession`; the REST enrollment read fails for them, as for [Current Living Situation](current-living-situation.md#record-and-retry). Readback queries one second after the later of now and the event date, because a read at exactly the event instant omits yes/no answers. A November 2, 2026 sandbox instrument exposed:
 
 | Role | Virtual field | Type |
 | --- | --- | --- |

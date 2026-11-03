@@ -1,5 +1,5 @@
 import type {Answers, EncodingOptions, PicklistSelector, WellSkyClient} from '../dist/esm/index.js';
-import type {UiMutationStore} from './index.mjs';
+import type {EnrollmentReader, UiMutationStore} from './index.mjs';
 /** Exact virtual fields from the target instrument's client-scoped metadata. No guessed codes. */
 export interface CoordinatedEntryEventFields {
     parentField: string;
@@ -75,4 +75,7 @@ export function createCoordinatedEntryEventRecorder(options: {
     api: WellSkyClient; store: UiMutationStore; fields: CoordinatedEntryEventFields;
     /** Tenant-verified labels for lookup answers, including the Event. */
     writeLabel: NonNullable<EncodingOptions['writeLabel']>;
+    /** Read the enrollment through this GWT reader instead of REST, which fails for grouped
+     * (household) enrollments. Use the reader `openEnrollmentSession` returns. */
+    enrollmentSession?: EnrollmentReader;
 }): CoordinatedEntryEventRecorder;

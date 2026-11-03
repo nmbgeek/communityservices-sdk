@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {withPageLock} from '../browser/page-lock.mjs';
 import {createClientWorkflows} from '../browser/client-workflows.mjs';
 
@@ -37,4 +38,11 @@ test('explicit goal case-note source keys reject changed intent before touching 
  const store={withLock:async(s,f)=>{scope=s;return f();},read:async()=>[stored],write:async()=>{throw Error('Must not write');}};
  const workflows=createClientWorkflows({page,store});
  await assert.rejects(workflows.createCaseNote({key:'source-1',clientId:1,goalId:2,providerId:3,noteDate:'2026-10-24',note:'Changed'}),e=>e.code==='CASE_NOTE_SOURCE_CONFLICT');assert.equal(touched,false);assert.match(scope,/case-note-source/);assert.doesNotMatch(scope,/source-1/);
+});
+test('goal case-note intents match regardless of the key order a store returns',async()=>{
+ const checksum=createHash('sha256').update('Same').digest('hex');
+ const stored={intent:{checksum,noteDate:'2026-10-24',providerId:3,goalId:2,clientId:1},state:'attempted'};let touched=false;
+ const page=new Proxy({},{get(_target,key){if(key==='url')return ()=>'https://wscs.wellsky.com/synthetic/com.bowmansystems.sp5.core.ServicePoint/index.html';touched=true;throw Error('Page must not be used');}});
+ const store={withLock:async(_s,f)=>f(),read:async()=>[stored],write:async()=>{throw Error('Must not write');}};
+ await assert.rejects(createClientWorkflows({page,store}).createCaseNote({key:'source-1',clientId:1,goalId:2,providerId:3,noteDate:'2026-10-24',note:'Same'}),e=>e.code!=='CASE_NOTE_SOURCE_CONFLICT');assert.equal(touched,true);
 });

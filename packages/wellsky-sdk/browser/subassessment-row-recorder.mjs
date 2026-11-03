@@ -52,10 +52,25 @@ export function rowHelpers(fail) {
  * answers that must read back, fields that must read back empty, extra intent-hash content and
  * the write request. write(input, body) sends it once.
  */
-export function createRowRecorder({api, store, fail, kind, noun, dateKey, parentField, normalize, compile, write}) {
-    const tenantScope = apiScope(api);
+export function createRowRecorder({api, store, enrollmentSession, fail, kind, noun, dateKey, parentField, normalize, compile, write}) {
+    if (enrollmentSession !== undefined && typeof enrollmentSession?.readEnrollment !== 'function') fail('invalid-enrollment-session');
+    const tenantScope = apiScope(api, enrollmentSession);
     const {instant, valueOf} = rowHelpers(fail);
+    const checkDates = (input, entryDate, exitDate) => {
+        if (input[dateKey] < entryDate || exitDate && input[dateKey] > instant(exitDate, true)) fail(`${noun}-outside-enrollment`);
+    };
+    // REST enrollment reads fail for grouped enrollments (42703), so households need the GWT reader.
+    // It reads only active enrollments and throws when the target is missing.
     async function readEnrollment(input) {
+        if (enrollmentSession) {
+            const target = {clientId: input.clientId, enrollmentId: input.enrollmentId}, snapshot = await enrollmentSession.readEnrollment(target);
+            if (snapshot?.source !== 'gwt-rpc' || snapshot.tenant !== api.tenant || snapshot.clientId !== target.clientId || snapshot.enrollmentId !== target.enrollmentId || !positive(snapshot.providerId) || !Array.isArray(snapshot.exits)) fail('enrollment-unavailable');
+            const exits = snapshot.exits.filter(e => e?.clientId === target.clientId && e.enrollmentId === target.enrollmentId);
+            if (exits.length !== 1 || exits[0].projectExitDate !== null && typeof exits[0].projectExitDate !== 'string') fail('enrollment-unavailable');
+            const entryDate = instant(snapshot.projectStartDate, true);
+            checkDates(input, entryDate, exits[0].projectExitDate);
+            return {entryDate, providerId: snapshot.providerId};
+        }
         const rows = [], ids = new Set(); let total;
         for (let page = 1; page <= 100; page++) {
             const response = await api.enrollments.listForClient({path: {clientId: input.clientId}, query: {perPage: 100, startPage: page, total_count: true}});
@@ -69,7 +84,7 @@ export function createRowRecorder({api, store, fail, kind, noun, dateKey, parent
                 const row = rows.find(row => row.enrollmentId === input.enrollmentId);
                 if (!row || row.isActive !== true || !positive(row.enrollmentProvider)) fail('enrollment-unavailable');
                 const entryDate = instant(row.projectStartDate, true);
-                if (input[dateKey] < entryDate || row.projectExitDate && input[dateKey] > instant(row.projectExitDate, true)) fail(`${noun}-outside-enrollment`);
+                checkDates(input, entryDate, row.projectExitDate);
                 return {entryDate, providerId: row.enrollmentProvider};
             }
             if (rows.length > total || !response.values.length) fail('incomplete-enrollment-read');

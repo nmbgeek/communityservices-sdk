@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Compare journaled attachment and case-note intents, and shelter stay identities, by canonical hash instead of key-order-sensitive JSON, so an identical retry no longer conflicts when a store such as Postgres `jsonb` reorders keys. Existing journals remain valid.
+- Add an optional `enrollmentSession` reader to `createCurrentLivingSituationRecorder` and `createCoordinatedEntryEventRecorder`. It reads the enrollment through GWT, so clients in household enrollments, whose REST enrollment reads fail with `42703`, can be recorded. Journal hashes match the REST path.
+- Export `parseRestInstant`, which parses REST read timestamps such as `2026-11-20 10:00:00-07` the same way on every engine and host timezone, treating a missing offset as UTC. `Date.parse` can return NaN for that form and reads a missing offset as local time.
+- Document that a mobile batch which returned HTTP 400 once saved one of its answers. The batch itself did not fail again in sandbox retests, including enrolled single-adult and household clients; the cause is unknown and the workflow is unchanged.
+
 ## 0.2.0 - 2026-11-02
 
 - Add opt-in private HTTP error-body capture and retain the original write failure as the cause of an uncertain enrollment stage. Failed writes still require reconciliation and are never replayed automatically.

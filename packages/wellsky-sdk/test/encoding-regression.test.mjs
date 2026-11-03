@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WellSkyClient, encodeAnswers, buildAssessmentDefinition } from '../dist/esm/index.js';
+import { WellSkyClient, encodeAnswers, buildAssessmentDefinition, parseRestInstant } from '../dist/esm/index.js';
 import { WellSkyClient as V2Client } from '../dist/esm/v2.js';
 const catalog = [
   [1,'RACE_ETH_WHI','White'],[2,'RACE_ETH_HSP','Hispanic/Latina/o'],[3,'RACE_ETH_PI','Native Hawaiian or Pacific Islander'],
@@ -56,3 +56,8 @@ for(const Client of [WellSkyClient,V2Client]){
   for(const n of [NaN,Infinity,1.5,841,-841])assert.throws(()=>new Client({...base,mobileAssessmentDateCorrectionMinutes:n}),{name:'ValidationError'});
  });
 }
+test('parseRestInstant reads REST timestamps independently of engine and host timezone', () => {
+  const at = Date.parse('2026-11-20T17:00:00Z');
+  for (const value of ['2026-11-20 10:00:00-07', '2026-11-20T10:00:00-07:00', '2026-11-20 17:00:00', '2026-11-20T17:00:00.000Z', '2026-11-20 12:00:00-0500']) assert.equal(parseRestInstant(value), at, value);
+  for (const value of [null, undefined, 1, '', 'not a date']) assert.ok(Number.isNaN(parseRestInstant(value)));
+});

@@ -39,6 +39,10 @@ for(const managed of [false,true])test(`attachment conflicts retain their identi
  if(managed)attachAuthentication(page,async()=>{reconnections++;},async()=>{probes++;return true;});
  assert.equal((await workflows().uploadAttachment(input)).attachment.attachmentId,42);
  assert.equal((await workflows().uploadAttachment(input)).attachment.attachmentId,42);
+ // Stores such as Postgres jsonb return keys in their own order; an identical retry must still match.
+ const reversed=v=>Array.isArray(v)?v.map(reversed):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).reverse().map(([k,x])=>[k,reversed(x)])):v;
+ for(const [scope,value]of journal)journal.set(scope,reversed(value));
+ assert.equal((await workflows().uploadAttachment(input)).outcome,'reconciled');
  const savedJournal=structuredClone([...journal]);
  const conflict=reason=>e=>e.code==='ATTACHMENT_CONFLICT'&&e.reason===reason;
  await assert.rejects(workflows().uploadAttachment({...input,description:'Changed intent'}),conflict('intent-changed'));

@@ -109,3 +109,12 @@ export function encodeNewSubassessmentRow(parent: QuestionDefinition, answers: A
   }
   return { subAssessments: encoded };
 }
+
+/** Milliseconds since epoch for a REST read timestamp, or NaN. Reads emit forms such as
+ * `2026-11-20 10:00:00-07` (space separator, hour-only offset) whose `Date.parse` result is
+ * engine-defined: NaN on some runtimes, and host-local time when the offset is missing.
+ * A value without an offset is UTC. */
+export function parseRestInstant(value: unknown): number {
+  if (typeof value !== "string") return NaN;
+  return Date.parse(value.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00") + (/(?:Z|[+-]\d\d(?::?\d\d)?)$/.test(value) ? "" : "Z"));
+}

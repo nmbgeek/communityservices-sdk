@@ -1,5 +1,5 @@
 import type {Answers, AnswerValue, WellSkyClient} from '../dist/esm/index.js';
-import type {UiMutationStore} from './index.mjs';
+import type {EnrollmentReader, UiMutationStore} from './index.mjs';
 /** Exact virtual fields from the target program's client-scoped metadata. No guessed codes. */
 export interface CurrentLivingSituationFields {
     parentField: string;
@@ -41,4 +41,7 @@ export class CurrentLivingSituationConflictError extends Error {
 /** REST orchestration. No browser launch, credential loading, or automatic interim. */
 export function createCurrentLivingSituationRecorder(options: {
     api: WellSkyClient; store: UiMutationStore; fields: CurrentLivingSituationFields;
+    /** Read the enrollment through this GWT reader instead of REST, which fails for grouped
+     * (household) enrollments. Use the reader `openEnrollmentSession` returns. */
+    enrollmentSession?: EnrollmentReader;
 }): CurrentLivingSituationRecorder;
