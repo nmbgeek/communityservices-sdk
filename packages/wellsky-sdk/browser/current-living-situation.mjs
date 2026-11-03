@@ -36,12 +36,12 @@ function compile(definition, fields, input, entryDate, tenant) {
 }
 
 /** One new recordset per contact key, even when two contacts have identical answers. */
-export function createCurrentLivingSituationRecorder({api, store, fields: mapping}) {
+export function createCurrentLivingSituationRecorder({api, store, fields: mapping, enrollmentSession}) {
     if (!store?.withLock || !store?.read || !store?.write) fail('api-and-store-required');
     exactFields(mapping, ['parentField', 'startDate', 'endDate', 'informationDate', 'livingSituation', 'verifiedBy']);
     const fields = structuredClone(Object.fromEntries(Object.entries(mapping).filter(([, value]) => value !== undefined)));
     if (['parentField', 'startDate', 'endDate', 'informationDate', 'livingSituation'].some(role => !nonempty(fields[role])) || fields.verifiedBy !== undefined && !nonempty(fields.verifiedBy) || new Set(Object.values(fields)).size !== Object.keys(fields).length) fail('invalid-field-mapping');
-    return createRowRecorder({api, store, fail, kind: 'current-living-situation', noun: 'contact', dateKey: 'informationDate', parentField: fields.parentField, normalize,
+    return createRowRecorder({api, store, enrollmentSession, fail, kind: 'current-living-situation', noun: 'contact', dateKey: 'informationDate', parentField: fields.parentField, normalize,
         compile(definition, input, enrollment) {
             const {parent, encoded} = compile(definition, fields, input, enrollment.entryDate, api.tenant);
             return {expected: encoded, empty: [], intent: {fields, encoded},

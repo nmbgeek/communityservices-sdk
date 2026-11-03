@@ -33,3 +33,11 @@ A second mobile write for a question that already had a row at the same effectiv
 After a successful standard write, the generic assessment read with `dateEffective` equal to the saved instant returned `null` for the yes/no answers, while other types at the same instant read normally. A query one second later, and the mobile read, returned the saved values. The standard create response also returned `null` for them.
 
 **Ask WellSky:** Is the effective-date comparison for yes/no answers intended to exclude the queried instant?
+
+## A failed mobile batch saved one of its answers
+
+Observed by an integrator on November 2, 2026, with synthetic records. A 15-answer `AddAssessmentAnswer` batch (1 `date`, 13 `lookup`, 1 `int`) was sent a few seconds after the client's household enrollment and entry-assessment answers were created. It returned HTTP 400; the error body was not captured. Afterwards the `int` answer was stored at the correct effective date and the other 14 were empty. The client's rows for this assessment were not read just before the send, so the absence of prior rows is inferred from the integration's own writes. Resends failed as in [the existing-row case](#mobile-writes-fail-for-an-existing-row).
+
+On November 3, the byte-identical batch returned 200 and read back completely on fresh synthetic clients without an enrollment, an enrolled single adult, and an enrolled household head. Splitting the batch, reordering it, or omitting the `int` answer made no difference. The failure has not been reproduced.
+
+**Ask WellSky:** Can a mobile write that returns HTTP 400 commit part of its batch? Is a write to an assessment assigned to the provider affected by work the server does after enrollment creation?

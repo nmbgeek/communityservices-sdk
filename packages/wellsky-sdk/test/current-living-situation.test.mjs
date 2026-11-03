@@ -65,3 +65,21 @@ test('a contact dated after the server clock verifies through a read at its info
  const r=await f.recorder().record({...input,key:'future',informationDate:future});
  assert.equal(r.outcome,'verified');assert.equal(f.writes.length,1);assert.ok(queries.every(q=>q==='2099-01-01T16:00:01Z'));
 });
+test('an enrollment session reads household enrollments that the REST list cannot',async()=>{
+ const snapshot=f=>({source:'gwt-rpc',tenant:testTenant,sessionId:'s',revision:'r',clientId:1,enrollmentId:10,projectStartDate:'2026-10-20T12:00:00.000Z',providerId:20,enrollmentType:'HUD',householdClientIds:[1,2],members:[{clientId:1,enrollmentId:10},{clientId:2,enrollmentId:11}],exits:[{clientId:1,enrollmentId:10,projectExitDate:f.exit??null},{clientId:2,enrollmentId:11,projectExitDate:null}],reviews:[],...f.extra});
+ const household=(over={})=>{const f=fixture(),reads=[];f.api.enrollments.listForClient=async()=>{throw Object.assign(Error('42703: column v.entry_date_effective does not exist'),{status:400});};
+  const enrollmentSession={connection:{tenant:testTenant},readEnrollment:async target=>{reads.push(target);if(over.fail)throw Error('Session interrupted');return snapshot(over);}};
+  return {...f,reads,recorder:()=>createCurrentLivingSituationRecorder({api:f.api,store:f.store,fields,enrollmentSession})};};
+ const f=household(),r=await f.recorder().record(input);
+ assert.equal(r.outcome,'verified');assert.equal(r.startDate,'2026-10-20T12:00:00.000Z');assert.deepEqual(f.reads,[{clientId:1,enrollmentId:10}]);
+ assert.equal((await f.recorder().record(input)).outcome,'already-present');assert.equal(f.writes.length,1);
+ // Both read paths hash the same enrollment context, so a key recorded over REST verifies here.
+ const rest=fixture();await rest.recorder().record(input);
+ const shared=household();for(const [scope,value]of rest.journal)shared.journal.set(scope,value);shared.rows.push(...rest.rows);
+ assert.equal((await shared.recorder().record(input)).outcome,'already-present');assert.equal(shared.writes.length,0);
+ for(const [over,expected]of [[{fail:true},/Session interrupted/],[{exit:'2026-10-23T12:00:00.000Z'},reason('contact-outside-enrollment')],[{extra:{tenant:'other'}},reason('enrollment-unavailable')],[{extra:{providerId:0}},reason('enrollment-unavailable')],[{extra:{exits:[]}},reason('enrollment-unavailable')],[{extra:{enrollmentId:11}},reason('enrollment-unavailable')]]){
+  const g=household(over);await assert.rejects(g.recorder().record(input),expected);assert.equal(g.writes.length,0);assert.equal(g.journal.size,0);
+ }
+ assert.throws(()=>createCurrentLivingSituationRecorder({api:f.api,store:f.store,fields,enrollmentSession:{connection:{tenant:'other'},readEnrollment:async()=>{}}}),/tenants must match/);
+ assert.throws(()=>createCurrentLivingSituationRecorder({api:f.api,store:f.store,fields,enrollmentSession:{}}),reason('invalid-enrollment-session'));
+});

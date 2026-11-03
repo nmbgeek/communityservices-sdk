@@ -43,7 +43,7 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 
 ## Known server gaps
 
-Grouped REST enrollment reads can return `42703: column v.entry_date_effective does not exist` after both UI and RPC saves. This is not specific to replay. A broken read is not an absent enrollment. The browser enrollment reader uses current UI/GWT evidence.
+Grouped REST enrollment reads can return `42703: column v.entry_date_effective does not exist` after both UI and RPC saves. This is not specific to replay. A broken read is not an absent enrollment. The browser enrollment reader uses current UI/GWT evidence. The enrollment workflow and, given `enrollmentSession`, the Current Living Situation and Coordinated Entry Event recorders read household enrollments through it.
 
 The October 24 [V2/V3 comparison](vendor-issues/enrollment-effective-date-column.md) reproduced the missing-column error for all 16 tested grouped complete enrollments in each version. Individual-only client lists succeeded, and individual pages within a mixed client also succeeded. Switching to V2 does not fix the issue. One individual complete read had a separate `Non-static method requires a target.` error.
 

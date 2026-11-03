@@ -3,9 +3,12 @@ import {createHash} from 'node:crypto';
 import {decodeMappedResponse} from './gwt-mapped.mjs';
 import {withPageLock} from './page-lock.mjs';
 import {AttachmentConflictError} from './attachment-conflict.mjs';
+import {semanticHash} from '../dist/esm/index.js';
 const id=n=>{if(!Number.isSafeInteger(n)||n<=0)throw Error('Positive integer ID required');return n;};
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const maxBytes=10_000_000;
+// Key-order independent: stores such as Postgres jsonb do not preserve insertion order.
+const sameIntent=async(a,b)=>await semanticHash(a)===await semanticHash(b);
 
 /** Browser-authenticated attachment access where the REST account cannot upload/read files.
  * Own this page exclusively. The store must persist before resolving and survive restarts. */
@@ -64,7 +67,7 @@ export function createClientWorkflows({page,store}) {
       await openClient(clientId);
       if(entityId&&!(await mapped(`SELECT g.goalId AS goalId FROM SpGoal AS g WHERE g.active = TRUE AND g.goalId = ${entityId} AND g.clientId = ${clientId}`)).length)throw Error('Goal does not belong to client');
       const records=await store.read(scope);if(!Array.isArray(records)||records.length>1)throw Error('Invalid upload journal');const previous=records[0];
-      if(previous&&JSON.stringify(previous.intent)!==JSON.stringify(intent))throw new AttachmentConflictError('intent-changed','Attachment intent conflicts with prior attempt');
+      if(previous&&!(await sameIntent(previous.intent,intent)))throw new AttachmentConflictError('intent-changed','Attachment intent conflicts with prior attempt');
       const matching=async()=>{
         const matches=(await list(clientId)).filter(a=>a.entityType===entityType&&(a.entityId??null)===entityId&&a.name===file.name);
         if(matches.length>1)throw new AttachmentConflictError('duplicate-name','Duplicate attachment names');
@@ -94,7 +97,7 @@ export function createClientWorkflows({page,store}) {
     const scope=JSON.stringify(key===undefined?[base,'case-note',clientId,goalId,providerId,noteDate,hash(note)]:[base,'case-note-source',hash(key)]);
     return store.withLock(scope,async()=>{
       const records=await store.read(scope);if(!Array.isArray(records)||records.length>1)throw Error('Invalid case note journal');const previous=records[0];
-      if(previous&&JSON.stringify(previous.intent)!==JSON.stringify(intent))throw Object.assign(Error('Case note source key conflicts with earlier intent'),{code:'CASE_NOTE_SOURCE_CONFLICT'});
+      if(previous&&!(await sameIntent(previous.intent,intent)))throw Object.assign(Error('Case note source key conflicts with earlier intent'),{code:'CASE_NOTE_SOURCE_CONFLICT'});
       return withPageLock(page,async()=>{
       await openClient(clientId);
       if(!(await mapped(`SELECT g.goalId AS goalId FROM SpGoal AS g WHERE g.active = TRUE AND g.goalId = ${goalId} AND g.clientId = ${clientId}`)).length)throw Error('Goal does not belong to client');

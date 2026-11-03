@@ -31,7 +31,7 @@ The enrollment report includes a read-only reproduction using existing synthetic
 - [Client update semantics](write-contracts.md#omitting-ssn-from-a-client-update-cleared-it): omitting SSN cleared its value. Clarify replacement versus partial-update behavior before classifying the omission rule as a defect.
 - [Goal update and relationship contract](write-contracts.md#goal-updates-require-a-field-marked-optional): `clientId` was required despite an optional schema field; returned household rows did not match the inspected goal association.
 - [Mobile effective dates](date-semantics.md#mobile-answer-writes-shift-the-effective-date) and [DOB serialization](date-semantics.md#dob-serialization-can-disagree-with-the-ui-calendar-date): document timezone/date-only rules and resolve inconsistent stored or displayed values. These are separate from complete-entry filtering.
-- [Yes/no answer contract](yes-no-answers.md): mobile wire format for yes/no, insert-only mobile writes, mandatory answers on standard updates, and the generic read's effective-instant comparison.
+- [Yes/no answer contract](yes-no-answers.md): mobile wire format for yes/no, insert-only mobile writes, a mobile batch that returned HTTP 400 yet saved one answer, mandatory answers on standard updates, and the generic read's effective-instant comparison.
 - [Filtering, empty reads, and response shapes](write-contracts.md#filtering-and-response-shapes-vary-by-operation): document per-endpoint syntax and align responses with schemas.
 - [Household head coverage](household-head-validation.md): the server accepted writes that left members enrolled after the original head exited. Clarify the intended validation and supported head-transfer/repair workflow; the SDK rejects that state.
 

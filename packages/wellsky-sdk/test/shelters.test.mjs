@@ -377,3 +377,9 @@ test('real checkout adapter treats a lone anchor as implicit but never invents o
         }
     } finally { await browser.close(); }
 });
+test('stay identities match regardless of the key order a store returns', async () => {
+    const f = fixture(); await f.helpers().checkIn(input);
+    const reversed = v => Array.isArray(v) ? v.map(reversed) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reversed(x)])) : v;
+    const read = f.store.read; f.store.read = async s => reversed(await read(s));
+    const again = await f.helpers().checkIn(input); assert.equal(again.stays.length, 2); assert.equal(f.counts.in, 1);
+});

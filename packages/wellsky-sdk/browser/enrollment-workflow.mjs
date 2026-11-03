@@ -2,7 +2,7 @@ import {apiScope} from './connection.mjs';
 import {validateBirthDate} from './date-of-birth.mjs';
 import {expectedExitDetails} from './exit-details.mjs';
 import {createHash} from 'node:crypto';
-import {readProgramCatalog,encodeAnswers,encodeNewSubassessmentRow,toItems} from '../dist/esm/index.js';
+import {readProgramCatalog,encodeAnswers,encodeNewSubassessmentRow,toItems,parseRestInstant} from '../dist/esm/index.js';
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const positive=v=>Number.isSafeInteger(v)&&v>0;
@@ -16,7 +16,7 @@ function date(value){
  return new Date(value).toISOString();
 }
 // REST scalar/enrollment timestamps are emitted as UTC without a suffix.
-const restDate=value=>typeof value==='string'?Date.parse(value.replace(' ','T').replace(/([+-]\d\d)$/,'$1:00')+(/(?:Z|[+-]\d\d(?::?\d\d)?)$/.test(value)?'':'Z')):NaN;
+const restDate=parseRestInstant;
 function key(value){if(typeof value!=='string'||!value.trim()||value.length>200)fail('stable key required');return value;}
 function fields(value,allowed){if(!object(value)||Object.keys(value).some(k=>!allowed.includes(k)))fail('unknown or invalid input fields');}
 function sameAnswer(expected,actual){
