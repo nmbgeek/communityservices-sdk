@@ -164,6 +164,30 @@ Client locks coordinate overlapping household and single-client operations. Dura
 
 See the typed [household example](../examples/household-enrollment-workflow.mts) and [live household verification](capabilities.md). The integration uses the configured tenant and uses an isolated authenticated page.
 
+## Individual enrollment exits
+
+Use `exitEnrollment` to end a standalone person's program enrollment. It requires a verified `createEnrollment` entry in the same durable store. Supply `enrollmentSession: session.enrollmentSession` and `exitUi: createHouseholdExitUi({page: session.page})` when constructing the workflow. The same exit UI port serves individual and household forms.
+
+Call `discoverExit` with the person's client, provider, type and entry date, then build their assessment plan from `catalog.exit.definition`.
+
+```ts
+const exit = await workflow.exitEnrollment({
+  key: sourceExitId,
+  enrollmentKey: sourceEnrollmentId,
+  clientId,
+  exitDate,
+  destination: 'Rental by client, no ongoing housing subsidy',
+  reasonForLeaving: 'Completed program',
+  assessment: exitPlan,
+});
+```
+
+The workflow verifies the exact enrollment and sole participant through fresh GWT reads, checks exit dates against entry and interim dates, and validates the assessment before saving. It journals one exit save attempt and verifies the date, destination, reason and conditional details before writing the assessment. Individual exits can have a null `exitSubgroupId`; the result preserves that value. The journal pins any returned subgroup identity on retries.
+
+Retain the same key, intent and store after failures. A lost save response triggers readback, never an automatic resend. Use `getStatus({clientId, key})` to inspect local progress. Exit metadata and assessment writes are separate stages, so a saved exit can remain pending assessment verification. `endDates` closes only the explicitly selected verification rows; enrollment exit does not automatically end every verification record.
+
+For a person in a linked household enrollment, use `exitHousehold` with that person as the only selected member. `exitEnrollment` rejects linked groups to preserve household head coverage. Neither method ends household membership. See the [typed individual exit example](../examples/individual-exit-workflow.mts). Standalone exit coverage is synthetic; it has not yet been accepted against a live tenant.
+
 ## Household exits
 
 Add `exitUi: createHouseholdExitUi({page: session.page})` to the workflow options. `discoverExit` returns the provider's entry, interim and exit definitions; use the exit definition to build each person's plan.
@@ -182,6 +206,8 @@ const exit = await workflow.exitHousehold({
 ```
 
 This requires a verified household entry in the same durable workflow store. Supply only the members exiting on this date, including a single member if needed; the household head need not be selected. Use separate stable keys for exits on different dates. Every exit plan is validated before saving. The browser submits one shared exit, then authoritative GWT reads verify every member's exit date, destination, reason and exact linked exit group before individual assessment writes. The returned members include `projectExitDate`, `exitSubgroupId` and any new verification `recordsetIds`. Exit dates cannot precede entry or an existing interim.
+
+To end the entire household's program enrollment, include every enrolled member who has not already exited. Already exited members retain their earlier dates. The existing head-coverage checks still apply.
 
 Use `endDates` only for verification records that changed, with replacement rows in `subassessments`; use `carryForward` for unchanged groups. Ending enrollment does not automatically end all verification records. Stored dates are never shifted. Discovery and completeness checks do not decide individual eligibility or which verification types apply.
 

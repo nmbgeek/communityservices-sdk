@@ -119,10 +119,15 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
  const scope=clientId=>JSON.stringify([tenantScope,'enrollment-workflow',clientId]);
  const reservationScope=clientId=>JSON.stringify([tenantScope,'household-workflow-reservation',clientId]);
  const run=async(kind,raw,internal={})=>{
-  fields(raw,kind==='entry'?['key','clientId','providerId','type','entryDate','assessment']:['key','enrollmentKey','clientId',kind==='exit'?'exitDate':'reviewDate','assessment']);
+  const standaloneExit=kind==='exit'&&internal.standaloneExit===true;
+  fields(raw,kind==='entry'?['key','clientId','providerId','type','entryDate','assessment']:['key','enrollmentKey','clientId',kind==='exit'?'exitDate':'reviewDate','assessment',...(standaloneExit?['destination','reasonForLeaving','destinationDetails','reasonForLeavingOther']:[])]);
   const input=structuredClone(raw);key(input.key);if(!positive(input.clientId))fail('client ID required');
   if(kind==='entry'){if(!positive(input.providerId)||!entryExitTypes.includes(input.type))fail('program and supported Entry/Exit type required');input.entryDate=date(input.entryDate);}else{key(input.enrollmentKey);if(kind==='addition')input.entryDate=date(input.entryDate);else if(kind==='exit')input.exitDate=date(input.exitDate);else input.reviewDate=date(input.reviewDate);}
   if(!object(input.assessment))fail('assessment plan required');
+  if(standaloneExit&&(typeof enrollmentSession?.readEnrollment!=='function'||typeof exitUi?.validateExit!=='function'||typeof exitUi?.saveExit!=='function'))fail('exit UI and authoritative enrollment session required');
+  if(standaloneExit&&['destination','reasonForLeaving'].some(field=>typeof input[field]!=='string'||!input[field].trim()))fail('destination and reason for leaving required');
+  const exitDetails=standaloneExit?expectedExitDetails(input):null;
+  if(standaloneExit&&(exitDetails.destinationDetails||exitDetails.reasonForLeavingOther)&&typeof exitUi.readExitDetails!=='function')fail('authoritative exit details reader required');
   const locked=internal.locked?async(_scope,work)=>work():store.withLock.bind(store);
   return locked(scope(input.clientId),async()=>{
    const reservations=await store.withLock(reservationScope(input.clientId),()=>store.read(reservationScope(input.clientId)));
@@ -137,6 +142,27 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(kind!=='entry'&&!entry)fail('verified enrollment workflow required');
    const context=kind==='entry'?input:kind==='addition'?{...entry.context,entryDate:input.entryDate}:entry.context;
    if(kind!=='entry'&&Date.parse(input.exitDate??input.reviewDate)<Date.parse(context.entryDate))fail('review precedes entry');
+   const exitTarget=standaloneExit?{clientId:input.clientId,enrollmentId:entry.enrollmentId}:null;
+   const inspectStandaloneExit=async()=>{
+    const snapshot=await enrollmentSession.readEnrollment(exitTarget);
+    if(snapshot?.source!=='gwt-rpc'||snapshot.tenant!==api.tenant||snapshot.clientId!==input.clientId||snapshot.enrollmentId!==entry.enrollmentId||snapshot.providerId!==context.providerId||snapshot.enrollmentType!==context.type||restDate(snapshot.projectStartDate)!==restDate(context.entryDate))fail('individual enrollment context mismatch');
+    if(!Array.isArray(snapshot.members)||snapshot.members.length!==1||snapshot.members[0].clientId!==input.clientId||snapshot.members[0].enrollmentId!==entry.enrollmentId)fail('linked household enrollment requires exitHousehold');
+    if(!Array.isArray(snapshot.reviews)||snapshot.reviews.some(r=>!Number.isFinite(restDate(r.reviewDate))||restDate(r.reviewDate)>restDate(input.exitDate)))fail('exit precedes an existing review');
+    if(!Array.isArray(snapshot.exits)||snapshot.exits.length!==1)fail('authoritative individual exit read required');
+    const exit=snapshot.exits[0];
+    if(exit.clientId!==input.clientId||exit.enrollmentId!==entry.enrollmentId||canonical(exit.clientIds)!==canonical([input.clientId])||canonical(exit.enrollmentIds)!==canonical([entry.enrollmentId]))fail('individual exit membership mismatch');
+    if(exit.projectExitDate===null){
+     if([exit.destination,exit.reasonForLeaving,exit.exitSubgroupId].some(v=>v!==null))fail('incomplete existing exit metadata');
+     return {found:false};
+    }
+    const label=value=>typeof value==='string'?value.replace(/\s*\(HUD\)\s*$/,'').trim():value;
+    if(restDate(exit.projectExitDate)!==restDate(input.exitDate)||label(exit.destination)!==label(input.destination)||label(exit.reasonForLeaving)!==label(input.reasonForLeaving)||exit.exitSubgroupId!==null&&(typeof exit.exitSubgroupId!=='string'||!exit.exitSubgroupId))fail('existing exit conflicts with requested exit');
+    if(record&&Object.hasOwn(record,'exitSubgroupId')&&record.exitSubgroupId!==exit.exitSubgroupId)fail('exit identity changed');
+    if(record?.steps.exit?.state==='verified'&&record.steps.exit.value.exitSubgroupId!==exit.exitSubgroupId)fail('exit identity changed');
+    if(typeof exitUi.readExitDetails==='function'&&canonical(await exitUi.readExitDetails(exitTarget))!==canonical(exitDetails))fail('stored exit details conflict with requested exit');
+    return {found:true,value:exit};
+   };
+   const exitInput=standaloneExit?{...exitTarget,clientIds:[input.clientId],exitDate:input.exitDate,destination:input.destination,reasonForLeaving:input.reasonForLeaving,...(input.destinationDetails?{destinationDetails:input.destinationDetails}:{}),...(input.reasonForLeavingOther?{reasonForLeavingOther:input.reasonForLeavingOther}:{})}:null;
    const discovered=await discover({clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate)},kind==='exit');
    const schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
    if((record&&record.schemaHash!==schemaHash)||(entry&&entry.schemaHash!==schemaHash))fail('program assessment configuration changed');
@@ -207,6 +233,10 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     if(restDate(end.endDate)<restDate(start[0].answer_value))fail('end date precedes record start');
     if(through[0].answer_value&&restDate(through[0].answer_value)!==restDate(end.endDate))fail('record already has a different end date');
    }
+   if(standaloneExit){
+    const observed=await inspectStandaloneExit();
+    if(!observed.found&&!record?.steps.exit)await exitUi.validateExit(exitInput);
+   }
    if(internal.preflight)return {assessmentCode:code,...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
    const wasVerified=record?.stage==='verified';
    if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
@@ -230,6 +260,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const findEnrollment=async()=>{
     const knownId=record.enrollmentId??record.steps.enrollment?.value??entry?.enrollmentId;
     if(internal.findEnrollment)return internal.findEnrollment({knownId,context});
+    if(standaloneExit){await inspectStandaloneExit();return {found:true,value:entry.enrollmentId};}
     const list=await enrollments(api,input.clientId),found=list.filter(e=>e.enrollmentProvider===context.providerId&&e.type===context.type&&restDate(e.projectStartDate)===restDate(context.entryDate)&&e.isActive!==false);
     if(found.length>1)fail('duplicate matching enrollments');
     const id=record.enrollmentId??record.steps.enrollment?.value??entry?.enrollmentId;if(id&&(!found[0]||found[0].enrollmentId!==id))fail('saved enrollment missing or changed');
@@ -244,9 +275,8 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const matches=review.snapshot.reviews.filter(r=>r.type==='Update'&&restDate(r.reviewDate)===restDate(at)&&r.clientIds.includes(input.clientId));if(matches.length!==1||record.reviewId&&record.reviewId!==matches[0].reviewId)fail('interim did not verify');record.reviewId=matches[0].reviewId;await persist();
    }
    if(kind==='exit'){
-    if(typeof internal.readExit!=='function')fail('household exit verification required');
-    const exit=await internal.readExit({clientId:input.clientId,enrollmentId:record.enrollmentId});
-    if(record.exitSubgroupId&&record.exitSubgroupId!==exit.exitSubgroupId)fail('exit identity changed');
+    const exit=standaloneExit?await step('exit',inspectStandaloneExit,()=>exitUi.saveExit(exitInput)):await internal.readExit({clientId:input.clientId,enrollmentId:record.enrollmentId});
+    if(Object.hasOwn(record,'exitSubgroupId')&&record.exitSubgroupId!==exit.exitSubgroupId)fail('exit identity changed');
     record.projectExitDate=exit.projectExitDate;record.exitSubgroupId=exit.exitSubgroupId;await persist();
    }
    for(const end of plan.ends){
@@ -565,7 +595,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     return {key:record.key,kind:record.kind,stage:record.stage,householdId:record.context.householdId,headClientId:input.headClientId,members:record.clientIds.map(clientId=>({clientId,key:memberKey(input.key,clientId),...structuredClone(record.members[clientId]??{})}))};
    });
   },
-  discover,createEnrollment:input=>run('entry',input),createInterim:input=>run('interim',input),
+  discover,createEnrollment:input=>run('entry',input),createInterim:input=>run('interim',input),exitEnrollment:input=>run('exit',input,{standaloneExit:true}),
   async getStatus(input){
    fields(input,['clientId','key']);if(!positive(input.clientId))fail('client ID required');key(input.key);
    return store.withLock(scope(input.clientId),async()=>{

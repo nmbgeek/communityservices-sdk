@@ -5,7 +5,7 @@ import {expectedExitDetails,rentalDestination} from './exit-details.mjs';
 
 const label=value=>value.replace(/\s*\(HUD\)\s*$/,'').trim();
 const id=value=>Number.isSafeInteger(value)&&value>0;
-/** Low-level UI port. Use through exitHousehold, which journals before save.
+/** Low-level UI port. Use through exitEnrollment or exitHousehold, which journal before save.
  * This port makes at most one Save click and never retries an uncertain write. */
 export function createHouseholdExitUi({page}){
  const connection=pageConnection(page),base=connection.moduleBaseUrl;
@@ -80,7 +80,9 @@ export function createHouseholdExitUi({page}){
    if((await box.isChecked())!==desired.includes(clientId))throw Error('Exit household selection mismatch');
   }
   const selected=await page.locator('[id^="HouseholdsCheckboxTree.householdCheckbox."]:visible input:checked').evaluateAll(es=>es.map(e=>Number(e.parentElement.id.match(/\.client-(\d+)$/)?.[1])).sort((a,b)=>a-b));
-  if(JSON.stringify(selected)!==JSON.stringify(desired))throw Error('Exit household selection incomplete');
+  // A standalone person's form can bind the target without rendering a household tree.
+  const implicit=await boxes.count()===0&&snapshot.members.length===1&&snapshot.members[0].clientId===input.clientId&&snapshot.members[0].enrollmentId===input.enrollmentId&&desired.length===1&&desired[0]===input.clientId;
+  if(!implicit&&JSON.stringify(selected)!==JSON.stringify(desired))throw Error('Exit household selection incomplete');
   const parts=await page.evaluate(value=>{const d=new Date(value),local=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),d.getMinutes(),d.getSeconds());if(+d!==+local)throw Error('Ambiguous local exit time');return {Month:String(d.getMonth()+1).padStart(2,'0'),Day:String(d.getDate()).padStart(2,'0'),Year:String(d.getFullYear()),Hour:String(d.getHours()%12||12),Minute:String(d.getMinutes()).padStart(2,'0'),Second:String(d.getSeconds()).padStart(2,'0'),'AM/PM':d.getHours()<12?'AM':'PM'};},input.exitDate);
   for(const [part,value]of Object.entries(parts)){const field=page.getByLabel(`Exit Date ${part}`,{exact:true});if(['Month','Day','Year'].includes(part))await field.fill(value);else await field.selectOption({label:value});if(await field.inputValue()!==value)throw Error('Exit date did not match');}
   for(const [field,name]of [['destination','Destination'],['reasonForLeaving','Reason for Leaving']])if(await page.getByLabel(name,{exact:true}).inputValue()!==chosen[field])throw Error('Exit choice did not match');

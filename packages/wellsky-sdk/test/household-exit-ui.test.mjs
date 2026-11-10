@@ -153,6 +153,15 @@ test('selected singleton exit permits an already exited household member outside
  const f=fixture({targetClient:2,targetEnrollment:52,exitedIds:[1],checkedIds:[1,2]}),value={...input(),clientId:2,enrollmentId:52,clientIds:[2]};
  await f.port.saveExit(value);assert.equal(f.saves,1);assert.deepEqual(f.boxes.map(b=>[b.clientId,b.checked]),[[1,false],[2,true],[3,false]]);assert.ok(f.events.includes('ClientEntryExitTab.editExit-imageLink_52'));
 });
+
+test('standalone exit permits an implicit sole participant when no checkbox tree is rendered',async()=>{
+ const f=fixture({members:[{clientId:1,enrollmentId:50}],boxIds:[]});
+ await f.port.validateExit({...input(),clientIds:[1]});assert.equal(f.saves,0);
+ await f.port.saveExit({...input(),clientIds:[1]});assert.equal(f.saves,1);
+});
+test('missing checkbox tree cannot silently exit a linked household participant',async()=>{
+ const f=fixture({boxIds:[]});await assert.rejects(f.port.saveExit({...input(),clientIds:[1]}),/selection incomplete/);assert.equal(f.saves,0);
+});
 test('selected household subset excludes all other members, including a previously checked member',async()=>{
  const members=[{clientId:1,enrollmentId:50},{clientId:2,enrollmentId:52},{clientId:3,enrollmentId:53}],f=fixture({members,checkedIds:[1,2,3]}),value={...input(),clientIds:[1,3]};
  await f.port.validateExit(value);assert.equal(f.saves,0);assert.deepEqual(f.boxes.map(b=>[b.clientId,b.checked]),[[1,true],[2,false],[3,true]]);await f.port.saveExit(value);assert.equal(f.saves,1);
