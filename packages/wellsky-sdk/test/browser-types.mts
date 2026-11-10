@@ -59,6 +59,10 @@ const birthDates=createDateOfBirth({api,store,ui:createDateOfBirthUi({page:sessi
 const enrollmentWorkflow=createEnrollmentWorkflow({api,store,birthDates,helpers:session.helpers,enrollmentSession:session.enrollmentSession,discovery:createProgramDiscovery({page:session.page})});
 const individualExit:Promise<import('@choiceapps/communityservices-sdk/browser').ExitEnrollmentResult>=enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',destination:'Rental by client',reasonForLeaving:'Completed program',assessment:{}});
 void individualExit;
+void enrollmentWorkflow.correctEntry({key:'correction',enrollmentKey:'entry',clientId:1,answers:{SCORE:{value:12}},clear:['OLD_PATH'],subassessments:[{key:'original-row',parentField:'ROWS',answers:{TYPE:{option:{code:'NEW'}}},clear:['DETAILS']}]});
+void enrollmentWorkflow.adoptEnrollment({key:'manual-entry',clientId:1,enrollmentId:2});
+void enrollmentWorkflow.adoptHouseholdEnrollment({key:'manual-household',householdId:3,headClientId:1,members:[{clientId:1,enrollmentId:2},{clientId:4,enrollmentId:5}]});
+void session.enrollmentSession.listEnrollments({clientId:1});
 // @ts-expect-error An individual exit needs explicit destination and reason.
 void enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',assessment:{}});
 const birthSnapshot:BirthDateSnapshot=await birthDates.read({clientId:1,assessmentCode:'ENTRY'});

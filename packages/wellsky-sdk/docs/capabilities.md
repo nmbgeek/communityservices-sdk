@@ -21,7 +21,7 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 | Later child or member | `addHouseholdMembers` | Must already belong to household; own later entry date, assessment, and DOB; existing dates preserved |
 | Interims | Workflow `createInterim`, `createHouseholdInterim` or low-level GWT `createInterimUpdate` | Workflow populates answers; low-level helper creates only review/participant links. Selected household members supported |
 | Household exit | `exitHousehold` with exit UI port | Selected members, staggered dates, subsidy/Other details, per-member exit assessments; all-member metadata uses one GWT save, assessments follow separately |
-| Individual enrollment exit | `exitEnrollment` with enrollment reader and exit UI port | Standalone participant, verified entry journal, exit details and assessment, same-key reconciliation; synthetic regression coverage only, live acceptance pending |
+| Individual enrollment exit | `exitEnrollment` with enrollment reader and exit UI port | Standalone participant, verified entry journal, exit details and assessment, same-key reconciliation; integrator-reported sandbox acceptance November 10, 2026 |
 | Head of household | Enrollment workflow guards | Missing or mid-enrollment replacement head rejected. Head cannot exit before remaining members. Retroactive replacement is not implemented |
 | Verification records at entry | `readEnrollmentVerifications` | Reads generic assessment and filters intervals; complete-enrollment entry arrays can omit valid UI rows |
 | Existing verification end dates | `api.subassessments.setEndDate` | Preserves row ID and other values, verifies result; no blind resend or delete/recreate |
@@ -44,7 +44,7 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 
 ## Known server gaps
 
-Grouped REST enrollment reads can return `42703: column v.entry_date_effective does not exist` after both UI and RPC saves. This is not specific to replay. A broken read is not an absent enrollment. The browser enrollment reader uses current UI/GWT evidence. The enrollment workflow and, given `enrollmentSession`, the Current Living Situation and Coordinated Entry Event recorders read household enrollments through it.
+Grouped REST enrollment reads can return `42703: column v.entry_date_effective does not exist` after both UI and RPC saves. This is not specific to replay. A broken read is not an absent enrollment. The browser enrollment reader uses current UI/GWT evidence. The configured enrollment workflow now uses its counted GWT catalog for creation preflight as well as targeted GWT reads. The Current Living Situation and Coordinated Entry Event recorders use targeted GWT reads when given `enrollmentSession`. Legacy custom readers without `listEnrollments` retain REST list behavior.
 
 The October 24 [V2/V3 comparison](vendor-issues/enrollment-effective-date-column.md) reproduced the missing-column error for all 16 tested grouped complete enrollments in each version. Individual-only client lists succeeded, and individual pages within a mixed client also succeeded. Switching to V2 does not fix the issue. One individual complete read had a separate `Non-static method requires a target.` error.
 
@@ -76,3 +76,13 @@ Independent needs and AIRS/service-type discovery use UI/GWT helpers. See [indep
 The [separate complete-enrollment target error](vendor-issues/enrollment-complete-target-error.md) was isolated to missing DOB information in controlled sandbox fixtures. Adding only `SVPPROFDOB`, or only `SVPPROFDOBTYPE` with `DOBTYPE_DONTKNOW` or `DOBTYPE_REFUSED`, changed HTTP 400 to success in V2 and V3. The quality-only fixtures retained empty DOB values, confirmed through REST and the UI. Never invent a DOB or recreate an enrollment to recover a read.
 
 Current Living Situation contact recording is available through `createCurrentLivingSituationRecorder`. It preserves distinct contacts with program-entry starts and optional recording-program verification. See the [contact guide](current-living-situation.md) for metadata mapping, date contracts, blocked server reads, and acceptance limits.
+
+## Integrator-reported acceptance, November 10, 2026
+
+The integrator reported these results using SDK 0.4.1 in the training tenant. They are reported live evidence, not a fresh SDK-team rerun. Client and enrollment identifiers are omitted from this public package.
+
+- A standalone enrollment exited on November 9 and the person was re-enrolled. Repeating the same keys produced no additional writes.
+- Two household cohorts exited successfully using plans from `discoverExit`, carrying forward fields with values and marking the rest not applicable.
+- After those household exits, both re-enrollment attempts failed on the pre-create REST list with HTTP 400 from the grouped-enrollment `42703` gap. This confirms that an exited household enrollment can still break that REST list.
+
+The GWT catalog correction has regression coverage for individual creation, household heads and member preflight, failed-read classification and re-enrollment. Same-date entry corrections and adoption of manual enrollments have synthetic coverage. These newer paths have not been independently verified live.

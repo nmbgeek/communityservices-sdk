@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 - 2026-11-10
+
+- Use a configured GWT enrollment catalog for creation and member preflight. Prior household enrollments, including exited entries, no longer force the known-broken REST grouped list. Failed or incomplete reads never imply absence.
+- Add `EnrollmentReadError` to distinguish a preflight non-commit from an unavailable read after a write attempt.
+- Add `correctEntry` for explicit scalar answers/clears and in-place edits to rows created by the original entry workflow. Preserve row IDs, other values and same-key recovery; original entry retries respect verified corrections.
+- Add read-only `adoptEnrollment` and `adoptHouseholdEnrollment` operations so manually entered enrollments can use the journaled exit workflows.
+- Record integrator-reported November 10, 2026 sandbox acceptance of 0.4.1 individual and household exits. The newly added catalog, correction and adoption paths have synthetic coverage; they have not been independently exercised against a live tenant.
+
 ## 0.4.1 - 2026-11-10
 
 - Pin GitHub verification and publication jobs to Ubuntu 24.04. The Ubuntu 26.04 runner selected by `ubuntu-latest` cannot install Chromium with the pinned Playwright version, which blocked public npm publication of 0.4.0. SDK behavior is unchanged.
@@ -7,7 +15,7 @@
 ## 0.4.0 - 2026-11-10
 
 - Add `exitEnrollment` for standalone program enrollments, with durable save journaling, authoritative exit verification, conditional destination/reason details and per-person exit assessments. Linked household participants continue to use `exitHousehold`, including whole-household and selected-member exits.
-- Support a standalone exit form without a household checkbox tree only when fresh enrollment data confirms exactly one participant. Added synthetic regression coverage; live standalone acceptance remains pending.
+- Support a standalone exit form without a household checkbox tree only when fresh enrollment data confirms exactly one participant. Initial acceptance covered synthetic regressions. Subsequent integrator-reported sandbox acceptance is recorded under capabilities on November 10, 2026.
 
 ## 0.3.0 - 2026-11-03
 

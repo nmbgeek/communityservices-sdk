@@ -67,6 +67,24 @@ export interface ExitEnrollmentInput extends HouseholdExitDetailInput {
   reasonForLeaving:string;
   assessment:EnrollmentAssessmentPlan;
 }
+export interface EntryRowCorrection {
+ /** Original subassessment row key from createEnrollment, never a new row key. */
+ key:string;parentField:string;answers?:Answers;clear?:string[];
+}
+export interface EntryCorrectionInput {
+ key:string;enrollmentKey:string;clientId:number;
+ answers?:Answers;
+ /** Explicit clears; an omitted field stays unchanged. Clear is distinct from No. */
+ clear?:string[];
+ subassessments?:EntryRowCorrection[];
+}
+export interface EntryCorrectionResult extends EnrollmentWorkflowResult {enrollmentKey:string;}
+export interface AdoptEnrollmentInput {key:string;clientId:number;enrollmentId:number;}
+export interface AdoptHouseholdEnrollmentInput {
+ key:string;householdId:number;headClientId:number;
+ /** Complete linked cohort, including already exited participants. IDs are explicit, not inferred. */
+ members:Array<{clientId:number;enrollmentId:number}>;
+}
 export interface EnrollmentWorkflowResult {
   key:string;
   outcome:'verified'|'already-present';
@@ -86,7 +104,7 @@ export interface ExitEnrollmentResult extends EnrollmentWorkflowResult {projectE
 export interface ExitWorkflowDiscovery extends EnrollmentWorkflowDiscovery {exit:{assessment:ProviderAssessmentItem;definition:AssessmentDefinition};}
 export interface EnrollmentWorkflowStatus {
   key:string;
-  kind:'entry'|'interim'|'exit';
+  kind:'entry'|'interim'|'exit'|'correction';
   stage:'pending'|'verified';
   assessmentCode:string;
   enrollmentId?:number;
@@ -103,6 +121,12 @@ export interface EnrollmentWorkflow {
   createInterim(input:InterimWorkflowInput):Promise<InterimWorkflowResult>;
   /** Standalone participant only. Linked household participants use exitHousehold. */
   exitEnrollment(input:ExitEnrollmentInput):Promise<ExitEnrollmentResult>;
+  /** Patch an open entry at its original timestamp, before any review or exit. */
+  correctEntry(input:EntryCorrectionInput):Promise<EntryCorrectionResult>;
+  /** Verify an existing standalone entry and journal it without an HMIS write. */
+  adoptEnrollment(input:AdoptEnrollmentInput):Promise<EnrollmentWorkflowResult>;
+  /** Verify all existing linked entries, original head and dates; no HMIS writes. */
+  adoptHouseholdEnrollment(input:AdoptHouseholdEnrollmentInput):Promise<HouseholdEnrollmentResult>;
   /** Reads the local journal only. A verified journal is not fresh server verification. */
   getStatus(input:{clientId:number;key:string}):Promise<EnrollmentWorkflowStatus|null>;
   createHouseholdEnrollment(input:HouseholdEnrollmentInput):Promise<HouseholdEnrollmentResult>;
@@ -196,6 +220,16 @@ export class EnrollmentWorkflowError extends Error {
   /** Failed durable stage, when known. The original write error is available as cause in memory. */
   readonly step?:string;
   constructor(reason:string,options?:ErrorOptions&{step?:string});
+}
+/** An unavailable list is never evidence that no enrollment exists. */
+export class EnrollmentReadError extends EnrollmentWorkflowError {
+ readonly code:'ENROLLMENT_READ_FAILED';
+ readonly clientId:number;
+ readonly source:'rest'|'gwt-rpc';
+ readonly phase:'preflight'|'reconciliation';
+ /** false only when this workflow has not attempted a server write. */
+ readonly committed:false|'unknown';
+ constructor(options:{clientId:number;source:'rest'|'gwt-rpc';writeAttempted:boolean;cause?:unknown});
 }
 /** Tenant-configured. Retain stable keys and one durable store for all cooperating writers.
  * A partial or uncertain write requires reconciliation; no automatic write replay occurs. */

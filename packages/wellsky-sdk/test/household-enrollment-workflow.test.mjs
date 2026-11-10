@@ -51,6 +51,62 @@ test('household entry and review retain distinct member identities and member-sp
  for(const id of [1,2]){assert.equal(f.clients.get(id).history[0].value,String(id));assert.equal(f.clients.get(id).history.at(-1).value,String(id*100));assert.equal(f.clients.get(id).rows.length,2);}
  assert.deepEqual(f.counts,{entry:1,attach:1,review:1,scalar:4,rows:2});
 });
+
+test('adopting a manual household preserves per-member dates and enables the existing exit workflow',async()=>{
+ const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.entries.find(e=>e.clientId===2).projectStartDate=reviewDate;f.journal.clear();
+ const input={key:'manual',householdId:30,headClientId:1,members:f.entries.map(({clientId,enrollmentId})=>({clientId,enrollmentId}))},before=structuredClone(f.counts);
+ const result=await f.workflow().adoptHouseholdEnrollment(input);assert.deepEqual(f.counts,before);assert.equal(result.members.find(m=>m.clientId===2).effectiveDate,new Date(reviewDate).toISOString());
+ assert.equal((await f.workflow().adoptHouseholdEnrollment({...input,members:[...input.members].reverse()})).outcome,'already-present');assert.deepEqual(f.counts,before);
+ const exit=await f.workflow().exitHousehold({...exitInput(),enrollmentKey:'manual'});assert.equal(exit.members.length,2);assert.equal(f.exitCounts.save,1);assert.equal(f.entries.find(e=>e.clientId===2).projectStartDate,reviewDate);
+ await f.workflow().exitHousehold({...exitInput(),enrollmentKey:'manual'});assert.equal(f.exitCounts.save,1);
+});
+test('manual household adoption rejects an incomplete cohort and orphaned head coverage without journaling',async()=>{
+ for(const orphaned of [false,true]){
+  const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.journal.clear();
+  if(orphaned)f.setExit(1,{...exitInput(),clientIds:[1]});
+  const members=f.entries.map(({clientId,enrollmentId})=>({clientId,enrollmentId}));
+  await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'manual',householdId:30,headClientId:1,members:orphaned?members:members.slice(0,1)}));assert.equal(f.journal.size,0);
+ }
+});
+
+test('a household member can correct only their scalars and preserve a retry of the original household entry',async()=>{
+ const f=fixture(),entry=await f.workflow().createHouseholdEnrollment(entryInput()),beforeRows=structuredClone([...f.clients].map(([id,c])=>[id,c.rows])),headHistory=structuredClone(f.clients.get(1).history);let standardWrites=0;
+ f.api.assessments.create=async({path,body,query})=>{standardWrites++;for(const q of body)f.clients.get(path.clientId).history.push({field:q.virt_field_name,value:q.answer_value||null,date:query.dateEffective});};
+ const member=entry.members.find(m=>m.clientId===2);
+ await f.workflow().correctEntry({key:'member-path',enrollmentKey:member.key,clientId:2,answers:{TOTAL:{value:12}},clear:['OPTIONAL']});
+ assert.equal(f.clients.get(2).history.filter(h=>h.field==='TOTAL').at(-1).value,'12');assert.deepEqual(f.clients.get(1).history,headHistory);assert.deepEqual([...f.clients].map(([id,c])=>[id,c.rows]),beforeRows);
+ const before=structuredClone(f.counts);await f.workflow().createHouseholdEnrollment(entryInput());assert.deepEqual(f.counts,before);assert.equal(standardWrites,1);
+});
+
+function gwtCatalog(f,history=[]){
+ let rest=0,reads=0;
+ f.api.enrollments.listForClient=async()=>{rest++;const error=new Error('42703: grouped enrollment list unavailable');error.status=400;throw error;};
+ f.enrollmentSession.listEnrollments=async({clientId})=>{
+  reads++;const values=[...history,...f.entries.map(e=>({...e,projectExitDate:f.exits.get(e.clientId)?.projectExitDate??null}))].filter(e=>e.clientId===clientId);
+  return {source:'gwt-rpc',tenant:testTenant,clientId,count:values.length,values:structuredClone(values)};
+ };
+ return {get rest(){return rest;},get reads(){return reads;}};
+}
+test('household re-enrollment after a verified exit uses GWT for the head and member preflight',async()=>{
+ const old=fixture();await old.workflow().createHouseholdEnrollment(entryInput());await old.workflow().exitHousehold(exitInput());
+ const history=old.entries.map(e=>({...e,enrollmentId:e.enrollmentId+1000,projectExitDate:old.exits.get(e.clientId).projectExitDate}));
+ const f=fixture(),calls=gwtCatalog(f,history);
+ for(const [scope,records]of old.journal)f.journal.set(scope,structuredClone(records));
+ const input={...entryInput(),key:'reentry',entryDate:'2026-10-24T16:00:00Z'};
+ const result=await f.workflow().createHouseholdEnrollment(input);assert.equal(result.members.length,2);assert.equal(calls.rest,0);assert.ok(calls.reads>=3);assert.equal(f.counts.entry,1);
+ const before=structuredClone(f.counts);assert.equal((await f.workflow().createHouseholdEnrollment(input)).outcome,'already-present');assert.deepEqual(f.counts,before);
+});
+test('household first entry tolerates a prior household in another program through GWT',async()=>{
+ const f=fixture(),calls=gwtCatalog(f,[{enrollmentId:100,clientId:1,enrollmentProvider:999,type:'HUD',projectStartDate:entryDate,projectExitDate:null,isActive:true},{enrollmentId:101,clientId:2,enrollmentProvider:999,type:'HUD',projectStartDate:entryDate,projectExitDate:null,isActive:true}]);
+ await f.workflow().createHouseholdEnrollment(entryInput());assert.equal(calls.rest,0);assert.equal(f.counts.entry,1);assert.equal(f.counts.attach,1);
+});
+test('unreadable household preflight is a non-commit and an unreadable head create reconciliation is unknown',async()=>{
+ const f=fixture();f.enrollmentSession.listEnrollments=async()=>{throw Error('Preflight list unavailable');};
+ await assert.rejects(f.workflow().createHouseholdEnrollment(entryInput()),e=>e.code==='ENROLLMENT_READ_FAILED'&&e.committed===false);assert.equal(f.counts.entry,0);assert.equal(f.counts.attach,0);
+ const g=fixture();gwtCatalog(g);const read=g.enrollmentSession.listEnrollments;
+ g.enrollmentSession.listEnrollments=async input=>{if(g.counts.entry)throw Error('Reconciliation read unavailable');return read(input);};
+ for(let retry=0;retry<2;retry++)await assert.rejects(g.workflow().createHouseholdEnrollment(entryInput()),e=>e.code==='ENROLLMENT_READ_FAILED'&&e.committed==='unknown');assert.equal(g.counts.entry,1);
+});
 test('reordered household input and new factory reconcile entry and interim with zero extra writes',async()=>{
  const f=fixture(),entry=await f.workflow().createHouseholdEnrollment(entryInput()),interim=await f.workflow().createHouseholdInterim(interimInput()),before=structuredClone(f.counts);
  const entryAgain=entryInput();entryAgain.members.reverse();const interimAgain=interimInput();interimAgain.members.reverse();
