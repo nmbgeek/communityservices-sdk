@@ -14,6 +14,7 @@ Every file here ships with the package and imports the public `@choiceapps/commu
 | [verification-snapshot.ts](verification-snapshot.ts) | Read assessment records effective at enrollment | Exported function; caller supplies assessment context |
 | [program-discovery.ts](program-discovery.ts) | Program and VA-entry assessment discovery | Exported function; authenticated page required |
 | [enrollment-workflow.mts](enrollment-workflow.mts) | Single entry and interim assessment plans | Exported function; caller supplies plans and dependencies |
+| [individual-exit-workflow.mts](individual-exit-workflow.mts) | Standalone program enrollment exit and assessment | Verified entry key, enrollment reader, exit UI port and durable store required |
 | [household-enrollment-workflow.mts](household-enrollment-workflow.mts) | Per-member enrollment and review | Existing household and per-member answer plans required |
 | [household-lifecycle-workflow.mts](household-lifecycle-workflow.mts) | Selected exits and a later child entry | Household membership precedes program attachment |
 | [household-exit-workflow.mts](household-exit-workflow.mts) | Household exit with destination details | Explicit exit dates and per-member plans required |

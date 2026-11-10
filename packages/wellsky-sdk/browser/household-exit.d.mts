@@ -27,7 +27,7 @@ export interface HouseholdExitUi {
  /** Reopen the saved member exit and read the persisted conditional fields, then cancel. */
  readExitDetails(target:HouseholdExitTarget):Promise<HouseholdExitStoredDetails>;
  validateExit(input:HouseholdExitUiInput):Promise<void>;
- /** One save attempt only. Use through the durable exitHousehold workflow. */
+ /** One save attempt only. Use through the durable exitEnrollment or exitHousehold workflow. */
  saveExit(input:HouseholdExitUiInput):Promise<void>;
 }
 /** UI port with fresh conditional choices and per-member readback. */

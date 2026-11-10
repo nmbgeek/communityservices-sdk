@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 - 2026-11-10
+
+- Add `exitEnrollment` for standalone program enrollments, with durable save journaling, authoritative exit verification, conditional destination/reason details and per-person exit assessments. Linked household participants continue to use `exitHousehold`, including whole-household and selected-member exits.
+- Support a standalone exit form without a household checkbox tree only when fresh enrollment data confirms exactly one participant. Added synthetic regression coverage; live standalone acceptance remains pending.
+
 ## 0.3.0 - 2026-11-03
 
 - Compare journaled attachment and case-note intents, and shelter stay identities, by canonical hash instead of key-order-sensitive JSON, so an identical retry no longer conflicts when a store such as Postgres `jsonb` reorders keys. Existing journals remain valid.

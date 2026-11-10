@@ -57,6 +57,10 @@ void birthDate.update({clientId:1,key:'dob-3',assessmentCode:'ENTRY',dateOfBirth
 import {createEnrollmentWorkflow,createProgramDiscovery,type BirthDateSnapshot} from '../browser/index.mjs';
 const birthDates=createDateOfBirth({api,store,ui:createDateOfBirthUi({page:session.page})});
 const enrollmentWorkflow=createEnrollmentWorkflow({api,store,birthDates,helpers:session.helpers,enrollmentSession:session.enrollmentSession,discovery:createProgramDiscovery({page:session.page})});
+const individualExit:Promise<import('@choiceapps/communityservices-sdk/browser').ExitEnrollmentResult>=enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',destination:'Rental by client',reasonForLeaving:'Completed program',assessment:{}});
+void individualExit;
+// @ts-expect-error An individual exit needs explicit destination and reason.
+void enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',assessment:{}});
 const birthSnapshot:BirthDateSnapshot=await birthDates.read({clientId:1,assessmentCode:'ENTRY'});
 void birthSnapshot;
 void enrollmentWorkflow.createEnrollment({key:'entry',clientId:1,providerId:2,type:'HUD',entryDate:'2026-10-20T16:00:00Z',assessment:{answers:{SVPPROFDOB:{value:'1984-02-29'}}}});

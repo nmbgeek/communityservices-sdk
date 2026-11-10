@@ -57,6 +57,16 @@ export interface InterimWorkflowInput {
   reviewDate:string;
   assessment:EnrollmentAssessmentPlan;
 }
+/** A standalone enrollment created or adopted by createEnrollment in this store. */
+export interface ExitEnrollmentInput extends HouseholdExitDetailInput {
+  key:string;
+  enrollmentKey:string;
+  clientId:number;
+  exitDate:string;
+  destination:string;
+  reasonForLeaving:string;
+  assessment:EnrollmentAssessmentPlan;
+}
 export interface EnrollmentWorkflowResult {
   key:string;
   outcome:'verified'|'already-present';
@@ -71,6 +81,8 @@ export interface EnrollmentWorkflowResult {
 }
 export interface InterimWorkflowResult extends EnrollmentWorkflowResult {reviewId:number;}
 export interface ExitWorkflowResult extends EnrollmentWorkflowResult {projectExitDate:string;exitSubgroupId:string;}
+/** An individual exit may have no linked exit subgroup. */
+export interface ExitEnrollmentResult extends EnrollmentWorkflowResult {projectExitDate:string;exitSubgroupId:string|null;}
 export interface ExitWorkflowDiscovery extends EnrollmentWorkflowDiscovery {exit:{assessment:ProviderAssessmentItem;definition:AssessmentDefinition};}
 export interface EnrollmentWorkflowStatus {
   key:string;
@@ -80,7 +92,7 @@ export interface EnrollmentWorkflowStatus {
   enrollmentId?:number;
   reviewId?:number;
   projectExitDate?:string;
-  exitSubgroupId?:string;
+  exitSubgroupId?:string|null;
   recordsetIds:Record<string,number>;
   steps:{name:string;state:'attempted'|'verified'}[];
 }
@@ -89,6 +101,8 @@ export interface EnrollmentWorkflow {
   discoverExit(input:EnrollmentDiscoveryInput):Promise<ExitWorkflowDiscovery>;
   createEnrollment(input:EnrollmentWorkflowInput):Promise<EnrollmentWorkflowResult>;
   createInterim(input:InterimWorkflowInput):Promise<InterimWorkflowResult>;
+  /** Standalone participant only. Linked household participants use exitHousehold. */
+  exitEnrollment(input:ExitEnrollmentInput):Promise<ExitEnrollmentResult>;
   /** Reads the local journal only. A verified journal is not fresh server verification. */
   getStatus(input:{clientId:number;key:string}):Promise<EnrollmentWorkflowStatus|null>;
   createHouseholdEnrollment(input:HouseholdEnrollmentInput):Promise<HouseholdEnrollmentResult>;
@@ -164,9 +178,9 @@ export interface EnrollmentWorkflowOptions {
   store:UiMutationStore;
   /** Required for SVPPROFDOB answers or carry-forward. Share this workflow's durable store. */
   birthDates?:DateOfBirth;
-  /** Required, along with api.households and helpers.addHouseholdMembers, for household operations. */
+  /** Required for exits; also required with api.households and helpers.addHouseholdMembers for household operations. */
   enrollmentSession?:EnrollmentReader;
-  /** Required for exitHousehold; the workflow owns its durable write journal. */
+  /** Required for exitEnrollment and exitHousehold; the workflow owns its durable write journal. */
   exitUi?:HouseholdExitUi;
   /** Required to set the later entry date for newly attached household members. */
   memberEntryDatePort?:MemberEntryDatePort;

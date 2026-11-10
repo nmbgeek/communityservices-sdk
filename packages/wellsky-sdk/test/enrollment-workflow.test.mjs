@@ -18,6 +18,8 @@ const definition=()=>[
 const row=(key,type,start=entryDate,receiving='NO')=>({key,parentField:'ROWS',answers:{TYPE:{option:{code:type}},RECEIVING:{option:{code:receiving}},START:{value:start},...(receiving==='YES'?{AMOUNT:{value:1000}}:{})}});
 const entryInput=()=>({key:'entry-1',clientId:1,providerId:2,type:'HUD',entryDate,assessment:{answers:{TOTAL:{value:0}},notApplicable:{OPTIONAL:'Not applicable to this synthetic scenario'},subassessments:[row('a','A'),row('b','B')]}});
 
+const exitInput=()=>({key:'exit-1',enrollmentKey:'entry-1',clientId:1,exitDate:'2026-10-24T16:00:00Z',destination:'Rental by client',reasonForLeaving:'Completed program',assessment:{answers:{TOTAL:{value:500}},carryForward:['ROWS'],notApplicable:{OPTIONAL:'Not applicable'}}});
+
 /** Only external storage/API behavior is simulated; encoding, discovery, coverage,
  * semantic matching, journal stages, and workflow recovery use the real SDK. */
 function fixture(faults={}) {
@@ -69,6 +71,120 @@ function fixture(faults={}) {
   const helpers={async createInterimUpdate(input){if(!reviews.some(r=>r.reviewDate===input.reviewDate)){counts.review++;reviews.push({reviewId:60,type:'Update',reviewDate:input.reviewDate,clientIds:[input.clientId]});}return {outcome:'reconciled',snapshot:{reviews:structuredClone(reviews)}};}};
   return {api,store,discovery,helpers,entries,reviews,rows,history,journal,counts,metadata,workflow:(options={})=>createEnrollmentWorkflow({api,store,discovery,helpers,...options})};
 }
+
+function exitFixture(faults={}) {
+ const f=fixture(faults),discover=f.discovery.getProviderAssessments;
+ f.discovery.getProviderAssessments=async input=>{const catalog=await discover(input);catalog.defaults.push({location:'showHudExit',resolution:'resolved',assessment:{assessmentId:3,code:'EXIT',name:'exit',assignedToAssessmentTab:true}});return catalog;};
+ const exit={clientId:1,enrollmentId:50,projectExitDate:null,destination:null,reasonForLeaving:null,exitSubgroupId:null,clientIds:[1],enrollmentIds:[50]};
+ const details={destinationDetails:null,reasonForLeavingOther:null},counts={saves:0,validations:0};
+ const enrollmentSession={async readEnrollment(target){
+  assert.deepEqual(target,{clientId:1,enrollmentId:50});
+  const snapshot={source:'gwt-rpc',tenant:testTenant,...target,providerId:2,enrollmentType:'HUD',projectStartDate:entryDate,members:[target],householdClientIds:[1],exits:[structuredClone(exit)],reviews:structuredClone(f.reviews)};
+  faults.changeSnapshot?.(snapshot);return snapshot;
+ }};
+ const exitUi={
+  async validateExit(){counts.validations++;if(faults.validationFailure)throw Error('Exit choice unavailable');},
+  async readExitDetails(){return structuredClone(details);},
+  async saveExit(input){
+   counts.saves++;
+   assert.ok([...f.journal.values()].flat().some(r=>r.key==='exit-1'&&r.steps.exit?.state==='attempted'),'journal precedes save');
+   assert.deepEqual(input.clientIds,[1]);
+   if(faults.noExitCommit)throw Error('Exit not acknowledged');
+   Object.assign(exit,{projectExitDate:input.exitDate,destination:input.destination,reasonForLeaving:input.reasonForLeaving,exitSubgroupId:faults.subgroup??null});
+   Object.assign(details,{destinationDetails:input.destinationDetails??null,reasonForLeavingOther:input.reasonForLeavingOther??null});
+   if(faults.lostExitResponse)throw Error('Exit response lost');
+  },
+ };
+ return {...f,exit,details,exitCounts:counts,enrollmentSession,exitUi,workflow:(options={})=>f.workflow({enrollmentSession,exitUi,...options})};
+}
+
+test('standalone exit verifies metadata and assessment, with no household journal or API',async()=>{
+ for(const subgroup of [undefined,'singleton-subgroup']){
+  const f=exitFixture({subgroup});await f.workflow().createEnrollment(entryInput());
+  const result=await f.workflow().exitEnrollment(exitInput());
+  assert.equal(result.enrollmentId,50);assert.equal(result.projectExitDate,exitInput().exitDate.replace('Z','.000Z'));assert.equal(result.exitSubgroupId,subgroup??null);assert.equal(result.assessmentCode,'EXIT');
+  assert.equal(f.history.at(-1).value,'500');assert.equal(f.history.at(-1).date,result.projectExitDate);
+  const before=structuredClone(f.counts);
+  const again=await f.workflow().exitEnrollment(exitInput());assert.equal(again.outcome,'already-present');assert.equal(f.exitCounts.saves,1);assert.deepEqual(f.counts,before);
+  const status=await f.workflow().getStatus({clientId:1,key:'exit-1'});assert.equal(status.stage,'verified');assert.equal(status.kind,'exit');assert.equal(status.exitSubgroupId,subgroup??null);assert.ok(status.steps.some(s=>s.name==='exit'&&s.state==='verified'));
+ }
+});
+test('standalone lost exit acknowledgement reconciles without resaving',async()=>{
+ const f=exitFixture({lostExitResponse:true});await f.workflow().createEnrollment(entryInput());await f.workflow().exitEnrollment(exitInput());await f.workflow().exitEnrollment(exitInput());assert.equal(f.exitCounts.saves,1);
+});
+test('standalone unknown exit blocks resave and competing operations',async()=>{
+ const f=exitFixture({noExitCommit:true});await f.workflow().createEnrollment(entryInput());const before=f.counts.scalars;
+ await assert.rejects(f.workflow().exitEnrollment(exitInput()),/uncertain write/);
+ await assert.rejects(f.workflow().exitEnrollment(exitInput()),/uncertain write/);
+ await assert.rejects(f.workflow().exitEnrollment({...exitInput(),key:'another'}),/unfinished workflow/);
+ await assert.rejects(f.workflow().createInterim({key:'review',enrollmentKey:'entry-1',clientId:1,reviewDate,assessment:exitInput().assessment}),/unfinished workflow/);
+ assert.equal(f.exitCounts.saves,1);assert.equal(f.counts.scalars,before);
+});
+test('standalone exit requires the original verified entry and exit dependencies',async()=>{
+ const f=exitFixture();await assert.rejects(f.workflow().exitEnrollment(exitInput()),/verified enrollment workflow/);
+ await f.workflow().createEnrollment(entryInput());
+ for(const options of [{enrollmentSession:undefined},{exitUi:undefined}])await assert.rejects(f.workflow(options).exitEnrollment(exitInput()),/exit UI and authoritative/);
+ assert.equal(f.exitCounts.saves,0);
+});
+test('standalone exit validates dates, complete plans and UI choices before writes',async()=>{
+ for(const change of [i=>i.exitDate='2026-10-18T16:00:00Z',i=>i.exitDate='2026-02-30T16:00:00Z',i=>i.assessment={},i=>i.destination='',i=>i.reasonForLeaving='']){
+  const f=exitFixture();await f.workflow().createEnrollment(entryInput());const before=structuredClone(f.counts),input=exitInput();change(input);
+  await assert.rejects(f.workflow().exitEnrollment(input));assert.equal(f.exitCounts.saves,0);assert.deepEqual(f.counts,before);
+ }
+ const f=exitFixture({validationFailure:true});await f.workflow().createEnrollment(entryInput());await assert.rejects(f.workflow().exitEnrollment(exitInput()),/choice unavailable/);assert.equal(await f.workflow().getStatus({clientId:1,key:'exit-1'}),null);
+});
+test('standalone exit refuses linked groups, mismatched context and incomplete authoritative reads',async()=>{
+ const changes=[s=>s.members.push({clientId:2,enrollmentId:51}),s=>s.tenant='other',s=>s.providerId=3,s=>s.enrollmentType='VA',s=>s.enrollmentId=51,s=>s.projectStartDate=reviewDate,s=>s.exits=[],s=>s.exits[0].clientIds=[1,2],s=>s.exits[0].enrollmentIds=[50,51],s=>s.reviews=[{reviewDate:'2026-10-25T16:00:00Z'}]];
+ for(const changeSnapshot of changes){
+  const f=exitFixture({changeSnapshot});await f.workflow().createEnrollment(entryInput());const before=structuredClone(f.counts);
+  await assert.rejects(f.workflow().exitEnrollment(exitInput()));assert.equal(f.exitCounts.saves,0);assert.deepEqual(f.counts,before);
+ }
+});
+test('standalone exit adopts an exact existing exit and rejects conflicts or identity drift',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());Object.assign(f.exit,{projectExitDate:exitInput().exitDate,destination:'Rental by client (HUD)',reasonForLeaving:'Completed program'});
+ await f.workflow().exitEnrollment(exitInput());assert.equal(f.exitCounts.saves,0);
+ await assert.rejects(f.workflow().exitEnrollment({...exitInput(),destination:'Changed'}),/previous intent/);
+ f.exit.exitSubgroupId='changed';await assert.rejects(f.workflow().exitEnrollment(exitInput()),/exit identity changed/);
+});
+test('standalone exit cannot overwrite a different existing exit',async()=>{
+ for(const change of [e=>e.projectExitDate=reviewDate,e=>e.destination='Other',e=>e.reasonForLeaving='Other',e=>e.exitSubgroupId=undefined]){
+  const f=exitFixture();await f.workflow().createEnrollment(entryInput());Object.assign(f.exit,{projectExitDate:exitInput().exitDate,destination:exitInput().destination,reasonForLeaving:exitInput().reasonForLeaving});change(f.exit);
+  await assert.rejects(f.workflow().exitEnrollment(exitInput()),/conflicts/);assert.equal(f.exitCounts.saves,0);
+ }
+});
+test('standalone exit retains conditional details and detects changed readback',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());
+ const input={...exitInput(),destination:'Other',destinationDetails:{kind:'other',explanation:'Synthetic destination'},reasonForLeaving:'Other',reasonForLeavingOther:'Synthetic reason'};
+ await f.workflow().exitEnrollment(input);assert.deepEqual(f.details.destinationDetails,input.destinationDetails);await f.workflow().exitEnrollment(input);assert.equal(f.exitCounts.saves,1);
+ f.details.reasonForLeavingOther='Changed';await assert.rejects(f.workflow().exitEnrollment(input),/stored exit details conflict/);
+});
+test('standalone exit resumes assessment failure without repeating the saved exit',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());const save=f.api.assessmentsMobile.addAnswer;
+ f.api.assessmentsMobile.addAnswer=async input=>{await save(input);throw Error('Lost scalar acknowledgement');};
+ await f.workflow().exitEnrollment(exitInput());await f.workflow().exitEnrollment(exitInput());assert.equal(f.exitCounts.saves,1);
+});
+test('concurrent standalone exit calls share the client journal lock',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());const results=await Promise.all([f.workflow().exitEnrollment(exitInput()),f.workflow().exitEnrollment(exitInput())]);assert.equal(f.exitCounts.saves,1);assert.deepEqual(results.map(r=>r.outcome),['verified','already-present']);
+});
+
+test('standalone exit preserves its identity if interrupted after persisting exit verification',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());
+ const write=f.store.write;let interrupt=true;
+ f.store.write=async(scope,records)=>{await write(scope,records);if(interrupt&&records.some(r=>r.key==='exit-1'&&r.steps?.exit?.state==='verified'&&!Object.hasOwn(r,'exitSubgroupId'))){interrupt=false;throw Error('Journal acknowledgement lost');}};
+ await assert.rejects(f.workflow().exitEnrollment(exitInput()),/Journal acknowledgement lost/);
+ f.exit.exitSubgroupId='unexpected-new-group';
+ await assert.rejects(f.workflow().exitEnrollment(exitInput()),/exit identity changed/);assert.equal(f.exitCounts.saves,1);
+});
+test('saved standalone exit stays pending after an uncommitted assessment and never replays either write',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());let attempts=0;
+ f.api.assessmentsMobile.addAnswer=async()=>{attempts++;throw Error('Assessment response unknown');};
+ await assert.rejects(f.workflow().exitEnrollment(exitInput()),/uncertain write/);
+ const status=await f.workflow().getStatus({clientId:1,key:'exit-1'});assert.equal(status.stage,'pending');assert.ok(status.steps.some(s=>s.name==='exit'&&s.state==='verified'));
+ await assert.rejects(f.workflow().exitEnrollment(exitInput()),/uncertain write/);assert.equal(f.exitCounts.saves,1);assert.equal(attempts,1);
+ // A subsequent authoritative read can establish that the original assessment committed.
+ f.history.push({field:'TOTAL',value:'500',date:exitInput().exitDate.replace('Z','.000Z')});
+ await f.workflow().exitEnrollment(exitInput());assert.equal(f.exitCounts.saves,1);assert.equal(attempts,1);
+});
 
 test('entry discovers configured instruments and reuses all writes across helper replacement',async()=>{
   const f=fixture(),first=await f.workflow().createEnrollment(entryInput());

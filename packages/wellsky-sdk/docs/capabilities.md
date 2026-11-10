@@ -21,6 +21,7 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 | Later child or member | `addHouseholdMembers` | Must already belong to household; own later entry date, assessment, and DOB; existing dates preserved |
 | Interims | Workflow `createInterim`, `createHouseholdInterim` or low-level GWT `createInterimUpdate` | Workflow populates answers; low-level helper creates only review/participant links. Selected household members supported |
 | Household exit | `exitHousehold` with exit UI port | Selected members, staggered dates, subsidy/Other details, per-member exit assessments; all-member metadata uses one GWT save, assessments follow separately |
+| Individual enrollment exit | `exitEnrollment` with enrollment reader and exit UI port | Standalone participant, verified entry journal, exit details and assessment, same-key reconciliation; synthetic regression coverage only, live acceptance pending |
 | Head of household | Enrollment workflow guards | Missing or mid-enrollment replacement head rejected. Head cannot exit before remaining members. Retroactive replacement is not implemented |
 | Verification records at entry | `readEnrollmentVerifications` | Reads generic assessment and filters intervals; complete-enrollment entry arrays can omit valid UI rows |
 | Existing verification end dates | `api.subassessments.setEndDate` | Preserves row ID and other values, verifies result; no blind resend or delete/recreate |
