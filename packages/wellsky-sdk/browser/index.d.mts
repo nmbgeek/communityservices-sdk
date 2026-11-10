@@ -18,14 +18,27 @@ export class LoginError extends Error {
 export interface UiSession {readonly connection:UiConnection;browser: Browser;context: BrowserContext;page: Page;passwordRecovery:'restored-original'|'not-needed';ensureAuthenticated():Promise<void>;reauthenticate():Promise<void>;close():Promise<void>;}
 export interface PlaywrightGwtOptions {page:Page;tenant:string;moduleBaseUrl:string;}
 export interface PlaywrightEnrollmentSnapshot extends GwtEnrollmentSnapshot {providerId:number;enrollmentType:string;exits:readonly GwtEnrollmentExit[];}
+export interface EnrollmentListRow {
+ enrollmentId:number;clientId:number;enrollmentProvider:number;type:string;
+ projectStartDate:string;projectExitDate:string|null;isActive:boolean;
+}
+export interface EnrollmentListSnapshot {
+ source:'gwt-rpc';tenant:string;clientId:number;count:number;values:EnrollmentListRow[];
+}
 export interface EnrollmentReader {
   readonly connection?:UiConnection;
   readEnrollment(target:{clientId:number;enrollmentId:number}):Promise<PlaywrightEnrollmentSnapshot>;
+  /** Built-in sessions supply this complete, counted list, including exited entries.
+   * Legacy custom readers without it retain REST list behavior. */
+  listEnrollments?(target:{clientId:number}):Promise<EnrollmentListSnapshot>;
+}
+export interface EnrollmentCatalogReader extends EnrollmentReader {
+ listEnrollments(target:{clientId:number}):Promise<EnrollmentListSnapshot>;
 }
 export function openUiSession(options:LoginOptions):Promise<UiSession>;
 /** The read-only enrollment session shares the page lock with mutation helpers. */
-export function openEnrollmentSession(options:LoginOptions&{store:GwtMutationStore & UiMutationStore}):Promise<UiSession&{helpers:GwtEnrollmentHelpers;enrollmentSession:EnrollmentReader;workflows:ClientWorkflows}>;
-export function createPlaywrightGwtSession(options:PlaywrightGwtOptions):Omit<GwtEnrollmentSession,'readEnrollment'>&EnrollmentReader;
+export function openEnrollmentSession(options:LoginOptions&{store:GwtMutationStore & UiMutationStore}):Promise<UiSession&{helpers:GwtEnrollmentHelpers;enrollmentSession:EnrollmentCatalogReader;workflows:ClientWorkflows}>;
+export function createPlaywrightGwtSession(options:PlaywrightGwtOptions):Omit<GwtEnrollmentSession,'readEnrollment'>&EnrollmentCatalogReader;
 export function createPlaywrightEnrollmentHelpers(options:PlaywrightGwtOptions&{store:GwtMutationStore}):GwtEnrollmentHelpers;
 
 /** Durable JSON journal. Use a separate namespace from enrollment intents. */

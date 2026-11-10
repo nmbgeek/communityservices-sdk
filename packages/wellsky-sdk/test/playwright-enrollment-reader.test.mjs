@@ -82,3 +82,35 @@ test('enrollment reader rejects incomplete or malformed exit metadata',async()=>
  for(const exits of [[],[{...normal,clientId:598}],[normal,normal],[{...normal,projectExitDate:'invalid'}],[{...normal,destinationCode:2}],[{...normal,exitSubgroupId:3}]])await assert.rejects(fixture({}, {exits}).read(),/Enrollment exit/);
  await assert.rejects(fixture({}, {exits:[{...normal,exitSubgroupId:'missing'}]}).read(),/subgroup incomplete/);
 });
+
+function listFixture(faults={}){
+ const calls=[],listeners=new Set(),events=[];
+ const row={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',projectExitDate:null,enrollmentProvider:16951,type:'HUD'};
+ const request={url:()=>base+'service/MetaQueryService',postData:()=>`7|0|9|${base}|FRESH_POLICY|`,allHeaders:async()=>({'content-type':'text/x-gwt-rpc','x-gwt-module-base':base,'x-gwt-permutation':'FRESH_PERMUTATION'})};
+ const page={
+  setDefaultTimeout(){},url:()=>faults.wrongTenant?base.replace(testTenant,'wrong')+'index.html':base+'index.html#loadClient;clientId=597',waitForFunction:async()=>{},
+  on(event,listener){assert.equal(event,'request');listeners.add(listener);},off(event,listener){assert.equal(event,'request');listeners.delete(listener);},
+  locator:()=>({count:async()=>0}),getByText:()=>({isVisible:async()=>true}),
+  getByRole:(_,o)=>({click:async()=>{events.push(o.name);if(o.name==='Entry / Exit'&&!faults.noSeed)for(const listener of listeners)listener(request);}}),
+  evaluate:async(_,req)=>{
+   calls.push(req);const rows=faults.rows??[row],stream=JSON.parse(wire(rows).slice(4));if(faults.total!==undefined)stream[0]=faults.total;
+   return {status:faults.status??200,body:'//OK'+JSON.stringify(stream)};
+  },
+ };
+ return {calls,events,listeners,row,read:()=>createPlaywrightGwtSession({page,tenant:testTenant,moduleBaseUrl:base}).listEnrollments({clientId:597})};
+}
+test('GWT enrollment list reads open and exited entries without needing an existing target ID',async()=>{
+ const f=listFixture(),old={...f.row,enrollmentId:694,projectExitDate:'2026-10-20T16:00:00.000Z'},g=listFixture({rows:[old,f.row]});
+ const result=await g.read();assert.deepEqual(result,{source:'gwt-rpc',tenant:testTenant,clientId:597,count:2,values:[old,f.row].map(r=>({...r,isActive:true}))});
+ assert.deepEqual(g.events,['Summary','Entry / Exit']);assert.equal(g.listeners.size,0);assert.equal(g.calls.length,1);
+ assert.match(g.calls[0].body,/e.clientId = 597 ORDER BY e.entryExitId LIMIT 1001,0/);assert.match(g.calls[0].body,/FRESH_POLICY/);assert.ok(!g.calls[0].body.includes('|getEntryExit|'));
+});
+test('GWT enrollment list confirms counted absence without a creation or edit popup',async()=>{
+ const f=listFixture({rows:[]});assert.deepEqual((await f.read()).values,[]);assert.equal(f.calls.length,1);assert.deepEqual(f.events,['Summary','Entry / Exit']);
+});
+test('GWT enrollment list refuses unavailable context, count truncation and malformed identities',async()=>{
+ const row=listFixture().row;
+ for(const faults of [{noSeed:true},{wrongTenant:true},{status:400},{total:2},{rows:[row,row]},{rows:[{...row,clientId:1}]},{rows:[{...row,enrollmentProvider:null}]},{rows:[{...row,projectExitDate:undefined}]},{rows:[{...row,projectStartDate:'bad'}]}]){
+  const f=listFixture(faults);await assert.rejects(f.read());assert.equal(f.listeners.size,0);
+ }
+});

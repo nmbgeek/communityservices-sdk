@@ -128,7 +128,39 @@ In this mode the mobile batch carries no yes/no answers. After it verifies, a se
 
 Every mandatory label is resolved before the first write. The `yesno` stage verifies with a generic read one second after the effective instant, because a read at the instant omits yes/no answers, and requires each answer and its effective timestamp to match. The mode is recorded in the journal. An unfinished workflow started in one mode fails in the other rather than switching endpoints, including journals left pending by earlier mobile yes/no attempts; those require separate reconciliation. Yes/no children of new subassessment rows still use the mobile row write, which drops them, so leave them unanswered in workflow rows. Record Coordinated Entry Events, which need yes/no and provider answers, with the [event recorder](coordinated-entry-events.md).
 
+## Correct an existing entry assessment
+
+`correctEntry` patches an entry at its original effective timestamp. Supply the verified `createEnrollment` key as `enrollmentKey` and a new stable `key` for each correction. Configure `enrollmentSession` and a `writeLabel` resolver for tenant-verified lookup labels. A correction requires an open enrollment with no interim reviews or exit workflows.
+
+```ts
+const corrected = await workflow.correctEntry({
+  key: sourceCorrectionId,
+  enrollmentKey: sourceEnrollmentId,
+  clientId,
+  answers: changedScalarAnswers,
+  clear: scalarFieldsNoLongerAsked,
+  subassessments: [{
+    key: originalEntryRowKey,
+    parentField,
+    answers: changedRowAnswers,
+    clear: rowFieldsToClear,
+  }],
+});
+```
+
+`answers` uses the ordinary answer and option selectors. `clear` explicitly removes a recorded value; an omitted field stays unchanged. Clearing a yes/no answer is distinct from answering `No`. Do not use `notApplicable` to clear an old answer. Every row key must identify an existing row returned by the original entry operation. The correction never creates a second row, deletes a row, or changes the enrollment date.
+
+Scalars use the standard assessment endpoint, which supports same-date updates. The batch includes every mandatory scalar, preserving its current value unless the patch explicitly answers or clears it. Missing mandatory values require an explicit answer or clear; lookup values require verified write labels. Readback checks one second after the original instant so stored yes/no values are visible.
+
+Row edits send only the changed cells to the existing recordset through the mobile endpoint. Lookup, text, numeric and date cells are supported; provider and yes/no row cells are refused before any write. Untouched cells, all other rows and row IDs must remain unchanged. DOB and household-head changes require their dedicated workflows and cannot be supplied as corrections here. An unmodified mandatory DOB is also refused because the standard batch cannot safely resend it through the DOB helper.
+
+All changes are validated before the first write. Scalar and row batches have separate journal stages, so a partial correction is not rolled back. Retry the same intent and key to reconcile; an uncertain batch is never resent automatically. `getStatus({clientId, key})` reports correction progress. Verified corrections update the original entry's verification expectations, so retrying `createEnrollment` under its old key does not restore the old path. A later correction uses a new correction key. See the [typed example](../examples/entry-correction-workflow.mts).
+
 ## Household enrollment and interim assessments
+
+Enrollment creation and member preflight use the complete GWT list when the configured `enrollmentSession` supplies `listEnrollments`. The built-in sessions supply it. This avoids the REST `42703` failure for clients with existing household enrollments, including exited enrollments and enrollments in other programs. Reads verify the client, tenant, row identities and count; a failed GWT read never falls back to REST or means an empty list. The current GWT reader refuses lists above 1,000 records. Legacy custom readers without this method retain the counted REST path.
+
+An unreadable list throws `EnrollmentReadError` with `code: 'ENROLLMENT_READ_FAILED'`, `source`, `clientId`, and the original error as `cause`. `phase: 'preflight'` and `committed: false` mean this workflow has not attempted a server write. After a write attempt, the error reports `phase: 'reconciliation'` and `committed: 'unknown'`. Retain the existing key and journal in both cases. A lost write followed by a failed read is never a non-commit.
 
 The same workflow exposes `createHouseholdEnrollment` and `createHouseholdInterim`. Supply `enrollmentSession: session.enrollmentSession` when constructing it. Initial household enrollment requires an existing household and at least two existing clients, including its head. Later interims and exits accept a nonempty subset of enrolled members. Establish household membership separately before enrollment.
 
@@ -186,7 +218,15 @@ The workflow verifies the exact enrollment and sole participant through fresh GW
 
 Retain the same key, intent and store after failures. A lost save response triggers readback, never an automatic resend. Use `getStatus({clientId, key})` to inspect local progress. Exit metadata and assessment writes are separate stages, so a saved exit can remain pending assessment verification. `endDates` closes only the explicitly selected verification rows; enrollment exit does not automatically end every verification record.
 
-For a person in a linked household enrollment, use `exitHousehold` with that person as the only selected member. `exitEnrollment` rejects linked groups to preserve household head coverage. Neither method ends household membership. See the [typed individual exit example](../examples/individual-exit-workflow.mts). Standalone exit coverage is synthetic; it has not yet been accepted against a live tenant.
+For a person in a linked household enrollment, use `exitHousehold` with that person as the only selected member. `exitEnrollment` rejects linked groups to preserve household head coverage. Neither method ends household membership. See the [typed individual exit example](../examples/individual-exit-workflow.mts). The integrator reported successful standalone exit and same-key no-write retry acceptance on November 10, 2026; see [reported sandbox acceptance](capabilities.md#integrator-reported-acceptance-november-10-2026).
+
+## Adopt an enrollment entered manually in WellSky
+
+Use `adoptEnrollment({key, clientId, enrollmentId})` for a standalone enrollment. For linked household enrollments, use `adoptHouseholdEnrollment({key, householdId, headClientId, members})`, where each member supplies both `clientId` and `enrollmentId`. Supply the complete linked cohort, including members already exited, and the original enrollment head. Adoption verifies authoritative GWT identities, program/type, entry dates, current household membership, head relationships when present, and head coverage across all enrollment intervals.
+
+Adoption writes only to the local durable journal. It does not create, attach, exit or modify an HMIS record. Later entrants retain their own original entry dates. An enrollment already tracked under another entry key is rejected; use its existing key. Retry an interrupted adoption with the same inputs and store.
+
+After adoption, pass its key as `enrollmentKey` to `exitEnrollment` or `exitHousehold`. Exit assessment plans and normal household head rules still apply. Adoption records existing enrollment identities, not historical subassessment row-key mappings, so its returned `recordsetIds` is empty. It cannot identify rows for `correctEntry` by a new invented key. See [manual-entry exit examples](../examples/existing-enrollment-exits.mts).
 
 ## Household exits
 

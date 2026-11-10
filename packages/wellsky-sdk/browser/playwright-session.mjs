@@ -47,22 +47,25 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     }
     throw Error('Could not close enrollment dialogs');
   };
-  const openTarget=async(target)=>{
-    id(target.clientId);id(target.enrollmentId);await guard();await closeDialogs();
-    const clientHeading=page.getByText(new RegExp(`^Client - \\(${target.clientId}\\)`));
+  const openClient=async(clientId)=>{
+    id(clientId);await guard();await closeDialogs();
+    const clientHeading=page.getByText(new RegExp(`^Client - \\(${clientId}\\)`));
     if(!await clientHeading.isVisible()){
-      const switcher=page.locator('select:visible').filter({has:page.locator(`option[value="${target.clientId}"]`)});
+      const switcher=page.locator('select:visible').filter({has:page.locator(`option[value="${clientId}"]`)});
       if(await switcher.count()===1&&await control(page,'ClientMainView.householdSubmitButton').isVisible()){
-        await switcher.selectOption(String(target.clientId));await control(page,'ClientMainView.householdSubmitButton').click();
+        await switcher.selectOption(String(clientId));await control(page,'ClientMainView.householdSubmitButton').click();
       }else{
         // A hash alone is not proof that GWT switched the displayed client.
-        if(new URL(page.url()).hash===`#loadClient;clientId=${target.clientId}`)throw Error('Client navigation did not load the requested client');
-        await page.goto(moduleBaseUrl+`index.html#loadClient;clientId=${target.clientId}`);
+        if(new URL(page.url()).hash===`#loadClient;clientId=${clientId}`)throw Error('Client navigation did not load the requested client');
+        await page.goto(moduleBaseUrl+`index.html#loadClient;clientId=${clientId}`);
       }
       await clientHeading.waitFor();await ready();
     }
     await page.getByRole('tab',{name:'Summary',exact:true}).click();await ready();
     await page.getByRole('tab',{name:'Entry / Exit',exact:true}).click();await ready();
+  };
+  const openTarget=async(target)=>{
+    id(target.enrollmentId);await openClient(target.clientId);
     const edit=control(page,`ClientEntryExitTab.editEntry-imageLink_${target.enrollmentId}`);
     await edit.waitFor();
     const response=page.waitForResponse(r=>r.url()===endpoint&&r.request().postData()?.includes('|getEntryExit|')&&r.request().postData()?.endsWith(`|${target.enrollmentId}|`));
@@ -96,6 +99,25 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     const ids=await page.locator('[id^="HouseholdsCheckboxTree.householdCheckbox."]:visible').evaluateAll(es=>es.map(e=>Number(e.id.match(/\.client-(\d+)$/)?.[1])));
     if(ids.some(n=>!Number.isSafeInteger(n)||n<=0))throw Error('Invalid household tree');
     await closeDialogs();return [...new Set([target.clientId,...ids])].sort((a,b)=>a-b);
+  };
+  const listEnrollments=async({clientId})=>{
+    id(clientId);await guard();wire=undefined;let captured;
+    const listener=request=>{
+      if(request.url()===moduleBaseUrl+'service/MetaQueryService'&&request.postData()?.startsWith('7|0|')){
+        const policy=request.postData().split('|')[4];
+        captured=request.allHeaders().then(headers=>({policy,headers:Object.fromEntries(['content-type','x-gwt-module-base','x-gwt-permutation'].map(k=>[k,headers[k]]))}));
+      }
+    };
+    page.on('request',listener);
+    try{await openClient(clientId);wire=await captured;}finally{page.off('request',listener);}
+    if(!wire?.policy||Object.values(wire.headers).some(v=>!v))throw Error('Fresh enrollment list context unavailable');
+    const rows=await mapped(`SELECT e.entryExitId AS enrollmentId, e.clientId AS clientId, e.entryDate AS projectStartDate, e.exitDate AS projectExitDate, e.providerId AS enrollmentProvider, e.typeEntryExit.name AS type FROM SpEntryExit AS e WHERE e.active = TRUE AND e.client.active = TRUE AND e.clientId = ${clientId} ORDER BY e.entryExitId`);
+    const ids=new Set();
+    for(const row of rows){
+      if(!Number.isSafeInteger(row.enrollmentId)||row.enrollmentId<=0||row.clientId!==clientId||!Number.isSafeInteger(row.enrollmentProvider)||row.enrollmentProvider<=0||typeof row.type!=='string'||!row.type.trim()||typeof row.projectStartDate!=='string'||!Number.isFinite(Date.parse(row.projectStartDate))||row.projectExitDate!==null&&(typeof row.projectExitDate!=='string'||!Number.isFinite(Date.parse(row.projectExitDate)))||ids.has(row.enrollmentId))throw Error('Invalid enrollment list');
+      ids.add(row.enrollmentId);
+    }
+    return {source:'gwt-rpc',tenant,clientId,count:rows.length,values:rows.map(row=>({...row,isActive:true}))};
   };
   const readEnrollment=async target=>{
     const model=await openTarget(target),householdClientIds=await householdIds(target);
@@ -190,7 +212,7 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     try{await save.click();const result=await Promise.race([captured,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),15000);})]);if(!result)throw Error('Expected mutation was not captured');pending=digest(JSON.stringify({url:result.url,headers:result.headers,body:result.body}));return result;}
     finally{clearTimeout(timer);await page.unroute('**/service/**',handler);await ready();await closeDialogs();}
   };
-  return {connection:resolveUiConnection({tenant,moduleBaseUrl}),readEnrollment,prepare,async send(request){
+  return {connection:resolveUiConnection({tenant,moduleBaseUrl}),readEnrollment,listEnrollments,prepare,async send(request){
     checkGeneration();const fingerprint=digest(JSON.stringify(request));if(!pending||fingerprint!==pending)throw Error('Only the newly prepared request can be sent once');pending=undefined;return post(request);
   }};
 }

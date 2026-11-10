@@ -32,7 +32,7 @@ function fixture(faults={}) {
     async write(scope,records){journal.set(scope,structuredClone(records));},
   };
   const readAnswers=at=>metadata.map(q=>{
-    if(q.questionType==='sub_assessment')return {virt_field_name:q.fieldName,question_type:q.questionType,sub_assessment_answer_list:structuredClone(rows)};
+    if(q.questionType==='sub_assessment')return {virt_field_name:q.fieldName,question_type:q.questionType,sub_assessment_answer_list:structuredClone(rows.filter(r=>r.parentField===q.fieldName||!r.parentField&&q.fieldName==='ROWS'))};
     // Live generic reads omit yes/no answers saved at exactly the queried instant.
     const found=history.filter(h=>h.field===q.fieldName&&(!at||(q.questionType==='yes_no'?Date.parse(h.date)<Date.parse(at):Date.parse(h.date)<=Date.parse(at)))).at(-1);
     return {virt_field_name:q.fieldName,question_type:q.questionType,answer_value:found?.value??null,date_effective:found?.date.replace(/Z$/,'')??null};
@@ -59,7 +59,13 @@ function fixture(faults={}) {
       const isRows=body.some(q=>q.question_type==='sub_assessment');counts[isRows?'rows':'scalars']++;
       if(isRows&&faults.noRowsCommit)throw Error('Rows failed without acknowledgement');
       for(const q of body){
-        if(q.question_type==='sub_assessment')for(const r of q.subAssessmentQuestionAnswers){rows.push({recordset_id:nextRow++,sub_assessment_list:r.subAssessments.map(c=>({...c,answer_value:c.answer_value||null,date_effective:query.dateEffective.replace(/Z$/,'')}))});if(faults.partialRows)throw Error('Only first row committed');}
+        if(q.question_type==='sub_assessment')for(const r of q.subAssessmentQuestionAnswers){
+         if(r.recordset_id>0){
+          const existing=rows.find(row=>row.recordset_id===r.recordset_id);assert.ok(existing,'update targets an existing row');assert.equal(r.isDeleted,false);
+          for(const c of r.subAssessments){const cell=existing.sub_assessment_list.find(v=>v.virt_field_name===c.virt_field_name);assert.ok(cell);Object.assign(cell,c,{answer_value:c.answer_value||null});if(faults.partialCorrection)throw Error('Only one corrected cell committed');}
+         }else rows.push({recordset_id:nextRow++,parentField:q.virt_field_name,sub_assessment_list:r.subAssessments.map(c=>({...c,answer_value:c.answer_value||null,date_effective:query.dateEffective.replace(/Z$/,'')}))});
+         if(faults.partialRows)throw Error('Only first row committed');
+        }
         else history.push({field:q.virt_field_name,value:q.answer_value,date:query.dateEffective});
       }
       if(isRows&&faults.lostRowsResponse||!isRows&&faults.lostScalarResponse)throw Error('Response lost after commit');
@@ -107,6 +113,21 @@ test('standalone exit verifies metadata and assessment, with no household journa
   const before=structuredClone(f.counts);
   const again=await f.workflow().exitEnrollment(exitInput());assert.equal(again.outcome,'already-present');assert.equal(f.exitCounts.saves,1);assert.deepEqual(f.counts,before);
   const status=await f.workflow().getStatus({clientId:1,key:'exit-1'});assert.equal(status.stage,'verified');assert.equal(status.kind,'exit');assert.equal(status.exitSubgroupId,subgroup??null);assert.ok(status.steps.some(s=>s.name==='exit'&&s.state==='verified'));
+ }
+});
+
+test('adopting a manually entered standalone enrollment performs no server writes and enables exit',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());f.journal.clear();const before=structuredClone(f.counts);
+ const input={key:'manual-entry',clientId:1,enrollmentId:50},adopted=await f.workflow().adoptEnrollment(input);
+ assert.equal(adopted.enrollmentId,50);assert.deepEqual(adopted.recordsetIds,{});assert.deepEqual(f.counts,before);
+ assert.equal((await f.workflow().adoptEnrollment(input)).outcome,'already-present');assert.deepEqual(f.counts,before);
+ await assert.rejects(f.workflow().adoptEnrollment({...input,key:'different'}),/already journaled/);
+ const exited=await f.workflow().exitEnrollment({...exitInput(),enrollmentKey:input.key});assert.equal(exited.enrollmentId,50);assert.equal(f.exitCounts.saves,1);
+});
+test('standalone adoption rejects incomplete context and linked groups before journaling',async()=>{
+ for(const changeSnapshot of [s=>s.tenant='wrong',s=>s.enrollmentId=51,s=>s.members.push({clientId:2,enrollmentId:51}),s=>s.exits=[],s=>s.projectStartDate='bad']){
+  const f=exitFixture({changeSnapshot});await f.workflow().createEnrollment(entryInput());f.journal.clear();const before=structuredClone(f.counts);
+  await assert.rejects(f.workflow().adoptEnrollment({key:'manual',clientId:1,enrollmentId:50}));assert.equal(f.journal.size,0);assert.deepEqual(f.counts,before);
  }
 });
 test('standalone lost exit acknowledgement reconciles without resaving',async()=>{
@@ -167,6 +188,94 @@ test('concurrent standalone exit calls share the client journal lock',async()=>{
  const f=exitFixture();await f.workflow().createEnrollment(entryInput());const results=await Promise.all([f.workflow().exitEnrollment(exitInput()),f.workflow().exitEnrollment(exitInput())]);assert.equal(f.exitCounts.saves,1);assert.deepEqual(results.map(r=>r.outcome),['verified','already-present']);
 });
 
+test('entry correction updates scalars and existing rows, clears values and preserves original entry retries',async()=>{
+ const f=exitFixture();f.metadata.push(question(9,'YESNO','yes_no'));
+ const entry=entryInput();delete entry.assessment.notApplicable.OPTIONAL;entry.assessment.answers.OPTIONAL={value:'Old location'};entry.assessment.answers.YESNO={value:true};
+ const workflow=()=>f.workflow({yesNoWrites:'standard',writeLabel:(_q,o)=>o.name}),created=await workflow().createEnrollment(entry),ids=created.recordsetIds;
+ const input={key:'path-change',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12},YESNO:{value:false}},clear:['OPTIONAL'],subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}},clear:['AMOUNT']},{key:'b',parentField:'ROWS',answers:{TYPE:{option:{code:'A'}}}}]};
+ const result=await workflow().correctEntry(input);assert.deepEqual(result.recordsetIds,ids);assert.equal(f.rows.length,2);
+ assert.equal(f.rows.find(r=>r.recordset_id===ids.a).sub_assessment_list.find(q=>q.virt_field_name==='TYPE').answer_value,'12');
+ assert.equal(f.rows[0].sub_assessment_list.find(q=>q.virt_field_name==='START').answer_value,entryDate);
+ assert.equal(f.history.filter(h=>h.field==='OPTIONAL').at(-1).value,null);assert.equal(f.history.filter(h=>h.field==='YESNO').at(-1).value,'No');
+ const before=structuredClone(f.counts);assert.equal((await workflow().correctEntry(input)).outcome,'already-present');
+ assert.equal((await workflow().createEnrollment(entry)).outcome,'already-present');assert.deepEqual(f.counts,before);
+ const reverse={...input,key:'path-change-back',answers:{TOTAL:{value:0},OPTIONAL:{value:'Old location'}},clear:['YESNO'],subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'A'}}}},{key:'b',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}}}]};
+ await workflow().correctEntry(reverse);assert.equal(f.history.filter(h=>h.field==='YESNO').at(-1).value,null);assert.equal(f.rows.length,2);
+ const after=structuredClone(f.counts);await workflow().correctEntry(input);await workflow().createEnrollment(entry);assert.deepEqual(f.counts,after);
+});
+test('entry correction preflights unsupported row types and unknown row keys before scalar writes',async()=>{
+ for(const patch of [{key:'missing',parentField:'ROWS',answers:{TYPE:{option:{code:'A'}}}},{key:'a',parentField:'wrong',answers:{TYPE:{option:{code:'A'}}}}]){
+  const f=exitFixture();await f.workflow().createEnrollment(entryInput());const before=structuredClone(f.counts);
+  await assert.rejects(f.workflow({writeLabel:(_q,o)=>o.name}).correctEntry({key:'correction',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}},subassessments:[patch]}),/existing entry row/);assert.deepEqual(f.counts,before);
+ }
+});
+test('unsupported provider or yes/no row patches fail before any requested scalar write',async()=>{
+ for(const type of ['provider','yes_no']){
+  const f=exitFixture();f.metadata.find(q=>q.fieldName==='ROWS').children.push(question(20,'UNSUPPORTED',type));await f.workflow().createEnrollment(entryInput());const before=structuredClone(f.counts);
+  await assert.rejects(f.workflow({writeLabel:(_q,o)=>o.name}).correctEntry({key:'correct',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}},subassessments:[{key:'a',parentField:'ROWS',answers:{UNSUPPORTED:{value:type==='yes_no'?true:123}}}]}),/unsupported correction field/);assert.deepEqual(f.counts,before);
+ }
+});
+test('entry correction refuses unexpected changes to another row and never resends the uncertain patch',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());const write=f.api.assessmentsMobile.addAnswer;
+ f.api.assessmentsMobile.addAnswer=async input=>{await write(input);f.rows[1].sub_assessment_list.find(c=>c.virt_field_name==='AMOUNT').answer_value='999';};
+ const input={key:'correct',enrollmentKey:'entry-1',clientId:1,subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}}}]};
+ await assert.rejects(f.workflow().correctEntry(input),/uncertain entry correction/);const before=structuredClone(f.counts);await assert.rejects(f.workflow().correctEntry(input),/uncertain entry correction/);assert.deepEqual(f.counts,before);
+});
+test('entry correction reconciles lost scalar and row acknowledgements without duplicate rows',async()=>{
+ const faults={},f=exitFixture(faults);await f.workflow().createEnrollment(entryInput());faults.lostStandardResponse=true;faults.lostRowsResponse=true;
+ const input={key:'correct',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}},subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}}}]},workflow=()=>f.workflow({writeLabel:(_q,o)=>o.name});
+ await workflow().correctEntry(input);const before=structuredClone(f.counts);await workflow().correctEntry(input);assert.deepEqual(f.counts,before);assert.equal(f.rows.length,2);
+});
+test('partial entry row correction stays pending and never replays the patch',async()=>{
+ const faults={},f=exitFixture(faults);await f.workflow().createEnrollment(entryInput());faults.partialCorrection=true;
+ const input={key:'correct',enrollmentKey:'entry-1',clientId:1,subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}},RECEIVING:{option:{code:'YES'}}}}]},workflow=()=>f.workflow({writeLabel:(_q,o)=>o.name});
+ await assert.rejects(workflow().correctEntry(input),/uncertain entry correction/);const before=structuredClone(f.counts);
+ await assert.rejects(workflow().correctEntry(input),/uncertain entry correction/);await assert.rejects(workflow().createEnrollment(entryInput()),/unfinished workflow/);assert.deepEqual(f.counts,before);assert.equal(f.rows.length,2);
+});
+
+test('original entry retries accept a verified correction of an originally blank mandatory lookup',async()=>{
+ const f=exitFixture();f.metadata.push(question(9,'MANDATORY','lookup',{mandatory:true,options:[option(11,'A'),option(12,'B')]}),question(10,'YESNO','yes_no'));
+ const input=entryInput();input.assessment.notApplicable.MANDATORY='Not asked on the original path';input.assessment.answers.YESNO={value:true};
+ const workflow=()=>f.workflow({yesNoWrites:'standard',writeLabel:(_q,o)=>o.name});await workflow().createEnrollment(input);
+ await workflow().correctEntry({key:'correction',enrollmentKey:input.key,clientId:1,answers:{MANDATORY:{option:{code:'B'}}}});
+ const before=structuredClone(f.counts);await workflow().createEnrollment(input);assert.deepEqual(f.counts,before);
+});
+
+test('same-date path correction clears 33 scalars and one row text cell while editing two distinct rows in place',async()=>{
+ const at='2026-11-09T16:00:00Z',f=exitFixture({changeSnapshot:s=>s.projectStartDate=at});
+ const options=[option(11,'OLD'),option(12,'NEW')],lookup=(id,field)=>question(id,field,'lookup',{options});
+ const yesFields=Array.from({length:27},(_,i)=>`LOCAL_YES_NO_${i+1}`);
+ const clearFields=['HUD_HOMELESSSTARTDATE','HUD_NUMBEROFTIMESTREETESSH','HUD_NOMONTHSTREETESSHIN3YRS','HOWMANYTIMESHAVEYOUBE_2','HOWMANYTIMESHAVEYOUBE_3','ONAREGULARDAYWHEREISI_1',...yesFields];
+ const cls='SVP_HUD_CURRENTLIVINGSITUATION',ce='SVP_HUD_COORDINATEDENTRYASSESS';
+ f.metadata.splice(0,f.metadata.length,
+  lookup(1,'TYPEOFLIVINGSITUATION'),lookup(2,'HUD_LENGTHOFSTAY'),question(3,'HPTARGETINGSCORETOTAL','int'),question(4,'HUD_LENGTHSTAY_LESS7NIGHTS','yes_no'),
+  question(5,clearFields[0],'date'),...clearFields.slice(1,5).map((field,i)=>lookup(6+i,field)),question(10,clearFields[5],'textbox'),...yesFields.map((field,i)=>question(20+i,field,'yes_no')),
+  question(60,cls,'sub_assessment',{children:[question(61,'SVP_HUD_CURRENTLIVINGSITUATIONSTART','date'),question(62,'SVP_HUD_CLS_INFODATE','date'),lookup(63,'SVP_HUD_CLS_CURRENTLIVINGSIT'),question(64,'SVP_HUD_CLS_LOCATIONDETAILS','textbox')]}),
+  question(70,ce,'sub_assessment',{children:[question(71,'SVP_HUD_COORDINATEDENTRYASSESSSTART','date'),lookup(72,'SVP_HUD_COORDENTRYASSESS_ASSESSLOCATION'),lookup(73,'SVP_HUD_COORDENTRYASSESS_ASSESSTYPE'),lookup(74,'SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL'),lookup(75,'SVP_HUD_COORDENTRYASSESS_PRIORITYSTATUS')]}),
+ );
+ const oldAnswers=Object.fromEntries(clearFields.map((field,i)=>[field,i===0?{value:at}:i<5?{option:{code:'OLD'}}:i===5?{value:'Old path text'}:{value:true}]));
+ const entry={...entryInput(),entryDate:at,assessment:{answers:{...oldAnswers,TYPEOFLIVINGSITUATION:{option:{code:'OLD'}},HUD_LENGTHOFSTAY:{option:{code:'OLD'}},HPTARGETINGSCORETOTAL:{value:0}},notApplicable:{HUD_LENGTHSTAY_LESS7NIGHTS:'Old path does not ask this'},subassessments:[
+  {key:'cls-entry',parentField:cls,answers:{SVP_HUD_CURRENTLIVINGSITUATIONSTART:{value:at},SVP_HUD_CLS_INFODATE:{value:at},SVP_HUD_CLS_CURRENTLIVINGSIT:{option:{code:'OLD'}},SVP_HUD_CLS_LOCATIONDETAILS:{value:'Mornings at the library'}}},
+  {key:'ce-entry',parentField:ce,answers:{SVP_HUD_COORDINATEDENTRYASSESSSTART:{value:at},SVP_HUD_COORDENTRYASSESS_ASSESSLOCATION:{option:{code:'OLD'}},SVP_HUD_COORDENTRYASSESS_ASSESSTYPE:{option:{code:'OLD'}},SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL:{option:{code:'OLD'}},SVP_HUD_COORDENTRYASSESS_PRIORITYSTATUS:{option:{code:'OLD'}}}},
+ ]}};
+ const workflow=()=>f.workflow({yesNoWrites:'standard',writeLabel:(_q,o)=>o.name}),created=await workflow().createEnrollment(entry);
+ const beforeRows=structuredClone(f.rows),input={key:'eviction-path',enrollmentKey:'entry-1',clientId:1,answers:{TYPEOFLIVINGSITUATION:{option:{code:'NEW'}},HUD_LENGTHOFSTAY:{option:{code:'NEW'}},HPTARGETINGSCORETOTAL:{value:12},HUD_LENGTHSTAY_LESS7NIGHTS:{value:false}},clear:clearFields,subassessments:[
+  {key:'cls-entry',parentField:cls,answers:{SVP_HUD_CLS_CURRENTLIVINGSIT:{option:{code:'NEW'}}},clear:['SVP_HUD_CLS_LOCATIONDETAILS']},
+  {key:'ce-entry',parentField:ce,answers:{SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL:{option:{code:'NEW'}}}},
+ ]};
+ const corrected=await workflow().correctEntry(input);assert.deepEqual(corrected.recordsetIds,created.recordsetIds);assert.equal(f.rows.length,2);assert.equal(clearFields.length,33);
+ for(const field of clearFields)assert.equal(f.history.filter(h=>h.field===field).at(-1).value,null);
+ assert.equal(f.history.filter(h=>h.field==='HUD_LENGTHSTAY_LESS7NIGHTS').at(-1).value,'No');
+ for(const original of beforeRows){
+  const current=f.rows.find(r=>r.recordset_id===original.recordset_id);assert.ok(current);
+  for(const cell of original.sub_assessment_list){const actual=current.sub_assessment_list.find(q=>q.virt_field_name===cell.virt_field_name);const expected=['SVP_HUD_CLS_CURRENTLIVINGSIT','SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL'].includes(cell.virt_field_name)?'12':cell.virt_field_name==='SVP_HUD_CLS_LOCATIONDETAILS'?null:cell.answer_value;assert.equal(actual.answer_value,expected,cell.virt_field_name);}
+ }
+ const writes=structuredClone(f.counts);await workflow().correctEntry(input);await workflow().createEnrollment(entry);assert.deepEqual(f.counts,writes);
+ const reverse={...input,key:'literal-homeless-path',answers:{...oldAnswers,TYPEOFLIVINGSITUATION:{option:{code:'OLD'}},HUD_LENGTHOFSTAY:{option:{code:'OLD'}},HPTARGETINGSCORETOTAL:{value:0}},clear:['HUD_LENGTHSTAY_LESS7NIGHTS'],subassessments:[{key:'cls-entry',parentField:cls,answers:{SVP_HUD_CLS_CURRENTLIVINGSIT:{option:{code:'OLD'}},SVP_HUD_CLS_LOCATIONDETAILS:{value:'Mornings at the library'}}},{key:'ce-entry',parentField:ce,answers:{SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL:{option:{code:'OLD'}}}}]};
+ await workflow().correctEntry(reverse);assert.equal(f.history.filter(h=>h.field==='HUD_LENGTHSTAY_LESS7NIGHTS').at(-1).value,null);assert.deepEqual(f.rows,beforeRows);
+ const finalWrites=structuredClone(f.counts);await workflow().correctEntry(input);await workflow().createEnrollment(entry);assert.deepEqual(f.counts,finalWrites);
+});
+
 test('standalone exit preserves its identity if interrupted after persisting exit verification',async()=>{
  const f=exitFixture();await f.workflow().createEnrollment(entryInput());
  const write=f.store.write;let interrupt=true;
@@ -191,6 +300,44 @@ test('entry discovers configured instruments and reuses all writes across helper
   assert.equal(first.enrollmentId,50);assert.equal(first.assessmentCode,'ENTRY');assert.deepEqual(Object.keys(first.recordsetIds),['a','b']);
   const second=await f.workflow().createEnrollment(entryInput());assert.equal(second.outcome,'already-present');assert.deepEqual(second.recordsetIds,first.recordsetIds);
   assert.deepEqual(f.counts,{enrollment:1,scalars:1,rows:1,endDates:0,review:0});
+});
+
+test('entry creation uses the configured GWT list when a prior household makes REST unreadable',async()=>{
+ const f=fixture();let restReads=0,gwtReads=0;
+ f.api.enrollments.listForClient=async()=>{restReads++;const error=new Error('42703: grouped enrollment list unavailable');error.status=400;throw error;};
+ const enrollmentSession={async listEnrollments({clientId}){gwtReads++;return {source:'gwt-rpc',tenant:testTenant,clientId,count:f.entries.length,values:f.entries.map(e=>({...e,projectExitDate:null}))};}};
+ const result=await f.workflow({enrollmentSession}).createEnrollment(entryInput());
+ assert.equal(result.enrollmentId,50);assert.equal(restReads,0);assert.ok(gwtReads>=2);assert.equal(f.counts.enrollment,1);
+ const again=await f.workflow({enrollmentSession}).createEnrollment(entryInput());assert.equal(again.outcome,'already-present');assert.equal(f.counts.enrollment,1);
+});
+
+test('a fresh entry never adopts a matching exited enrollment and an old keyed retry retains its own ID',async()=>{
+ const f=fixture();f.entries.push({clientId:1,enrollmentId:49,enrollmentProvider:2,type:'HUD',projectStartDate:entryDate,projectExitDate:reviewDate,isActive:true});
+ const created=await f.workflow().createEnrollment(entryInput());assert.equal(created.enrollmentId,50);assert.equal(f.counts.enrollment,1);
+ f.entries.find(e=>e.enrollmentId===50).projectExitDate=reviewDate;f.entries.push({...f.entries[1],enrollmentId:51,projectExitDate:null});
+ assert.equal((await f.workflow().createEnrollment(entryInput())).enrollmentId,50);assert.equal(f.counts.enrollment,1);
+});
+test('unreadable pre-create lists are typed non-commits, while post-create reads remain uncertain',async()=>{
+ const {EnrollmentReadError}=await import('@choiceapps/communityservices-sdk/browser');
+ for(const source of ['rest','gwt-rpc']){
+  const f=fixture();const cause=Object.assign(new Error('Synthetic unreadable list'),{status:400});
+  const bad=async()=>{throw cause;};
+  const options=source==='rest'?{}:{enrollmentSession:{listEnrollments:bad}};
+  f.api.enrollments.listForClient=bad;
+  await assert.rejects(f.workflow(options).createEnrollment(entryInput()),e=>e instanceof EnrollmentReadError&&e.code==='ENROLLMENT_READ_FAILED'&&e.phase==='preflight'&&e.committed===false&&e.source===source&&e.cause===cause);
+  assert.equal(f.counts.enrollment,0);
+ }
+ const f=fixture(),read=f.api.enrollments.listForClient;
+ f.api.enrollments.listForClient=async()=>{if(f.counts.enrollment)throw Error('Read lost after create');return read();};
+ for(let retry=0;retry<2;retry++)await assert.rejects(f.workflow().createEnrollment(entryInput()),e=>e instanceof EnrollmentReadError&&e.phase==='reconciliation'&&e.committed==='unknown');
+ assert.equal(f.counts.enrollment,1);
+});
+test('GWT list failures and incomplete or mismatched lists never fall back to REST or create',async()=>{
+ for(const change of [s=>s.tenant='wrong',s=>s.clientId=2,s=>s.count=1,s=>s.source='rest',s=>s.values=[{}]]){
+  const f=fixture();let rest=0;f.api.enrollments.listForClient=async()=>{rest++;throw Error('REST must not run');};
+  const enrollmentSession={async listEnrollments(){const s={source:'gwt-rpc',tenant:testTenant,clientId:1,count:0,values:[]};change(s);return s;}};
+  await assert.rejects(f.workflow({enrollmentSession}).createEnrollment(entryInput()),e=>e.code==='ENROLLMENT_READ_FAILED'&&e.committed===false);assert.equal(rest,0);assert.equal(f.counts.enrollment,0);
+ }
 });
 test('lost enrollment, scalar and row acknowledgements reconcile without replay',async()=>{
   const f=fixture({lostEnrollmentResponse:true,lostScalarResponse:true,lostRowsResponse:true});

@@ -25,7 +25,7 @@ Runtime exports at the root: `AmbiguousCommitError`, `AssessmentMetadata`, `Auth
 
 Import from `@choiceapps/communityservices-sdk/browser` in server-side ESM. These helpers use the tenant supplied by your application. Browser interfaces require `playwright-core`; some orchestration helpers use REST plus injected UI ports rather than directly launching a browser.
 
-Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`, `EnrollmentWorkflowError`, `LoginError`, `SessionInterruptedError`, `createFileGwtMutationStore`, `createPlaywrightEnrollmentHelpers`, `createPlaywrightGwtSession`, `createCasePlanUi`, `createCasePlans`, `createClientCreator`, `createClientProfile`, `createClientProfileUi`, `createClientWorkflows`, `createCoordinatedEntryEventRecorder`, `createDateOfBirth`, `createDateOfBirthUi`, `createEnrollmentWorkflow`, `createHouseholdExitUi`, `createHouseholdUi`, `createHouseholds`, `createMemberEntryDatePort`, `createProgramDiscovery`, `createServiceRecorder`, `createServiceUi`, `getHouseholdOptions`, `getSsvfServiceRules`, `openEnrollmentSession`, `openUiSession`, `validateBirthDate`, `resolveUiConnection`.
+Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`, `EnrollmentWorkflowError`, `EnrollmentReadError`, `LoginError`, `SessionInterruptedError`, `createFileGwtMutationStore`, `createPlaywrightEnrollmentHelpers`, `createPlaywrightGwtSession`, `createCasePlanUi`, `createCasePlans`, `createClientCreator`, `createClientProfile`, `createClientProfileUi`, `createClientWorkflows`, `createCoordinatedEntryEventRecorder`, `createDateOfBirth`, `createDateOfBirthUi`, `createEnrollmentWorkflow`, `createHouseholdExitUi`, `createHouseholdUi`, `createHouseholds`, `createMemberEntryDatePort`, `createProgramDiscovery`, `createServiceRecorder`, `createServiceUi`, `getHouseholdOptions`, `getSsvfServiceRules`, `openEnrollmentSession`, `openUiSession`, `validateBirthDate`, `resolveUiConnection`.
 
 | Task | Contract | Methods or behavior |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`
 | Profile fields and Sex | [Client profile](../browser/client-profile.d.mts) | `read`, `update` |
 | Calendar DOB | [Birth dates](../browser/date-of-birth.d.mts) | `read`, `validate`, `verify`, `update` |
 | Provider assessment defaults | [Discovery](../browser/program-discovery.d.mts) | `listAssessments`, `getProviderAssessments` |
-| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, member additions, interim, `exitEnrollment`, `exitHousehold`, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
+| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, `correctEntry`, `adoptEnrollment`, `adoptHouseholdEnrollment`, member additions, interim, `exitEnrollment`, `exitHousehold`, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
 | Entry-date and exit UI ports | [Member entry](../browser/member-entry-date.d.mts), [exit](../browser/household-exit.d.mts) | Fresh reads and targeted completion |
 | Services and recovery diagnostics | [Service recording](../browser/service-recording.d.mts) | `record`, `recordBulk`, Funding Sources, `RecoveryDiagnostic` |
 | SSVF conditional rules | [SSVF types](../browser/ssvf-rules.d.mts) | [Field rules](../SSVF.md) and dated option snapshots |

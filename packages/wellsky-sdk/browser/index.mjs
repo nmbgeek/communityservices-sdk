@@ -10,7 +10,7 @@ export async function openEnrollmentSession({store,...loginOptions}) {
   try {
     const helpers=createPlaywrightEnrollmentHelpers({page:session.page,store,...session.connection});
     const reader=createPlaywrightGwtSession({page:session.page,...session.connection});
-    const enrollmentSession={connection:session.connection,readEnrollment:target=>withPageLock(session.page,()=>reader.readEnrollment(target))};
+    const enrollmentSession={connection:session.connection,readEnrollment:target=>withPageLock(session.page,()=>reader.readEnrollment(target)),listEnrollments:target=>withPageLock(session.page,()=>reader.listEnrollments(target))};
     return Object.assign(session,{helpers,enrollmentSession,workflows:createClientWorkflows({page:session.page,store})});
   }catch(error){await session.close();throw error;}
 }
@@ -21,7 +21,7 @@ export {createServiceUi} from './service-ui.mjs';
 export {createServiceRecorder} from './service-recording.mjs';
 export {getSsvfServiceRules} from './ssvf-rules.mjs';
 export {createProgramDiscovery} from './program-discovery.mjs';
-export {createEnrollmentWorkflow,EnrollmentWorkflowError} from './enrollment-workflow.mjs';
+export {createEnrollmentWorkflow,EnrollmentWorkflowError,EnrollmentReadError} from './enrollment-workflow.mjs';
 export {createMemberEntryDatePort} from './member-entry-date.mjs';
 export {createHouseholdExitUi} from './household-exit.mjs';
 
