@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 - 2026-11-10
+
+- Pin GitHub verification and publication jobs to Ubuntu 24.04. The Ubuntu 26.04 runner selected by `ubuntu-latest` cannot install Chromium with the pinned Playwright version, which blocked public npm publication of 0.4.0. SDK behavior is unchanged.
+
 ## 0.4.0 - 2026-11-10
 
 - Add `exitEnrollment` for standalone program enrollments, with durable save journaling, authoritative exit verification, conditional destination/reason details and per-person exit assessments. Linked household participants continue to use `exitHousehold`, including whole-household and selected-member exits.
