@@ -28,7 +28,7 @@ function fixture({type='Standard',target=1,implicit=false,forceMethod}={}){
   if(typeof arg==='string')return fn(arg);
   const q=arg.body;let rows=[];
   if(q.includes('e.typeEntryExit.name AS enrollmentType'))rows=[{clientId:target,enrollmentId,providerId:99,enrollmentType:type,projectStartDate:'2026-11-01T16:00:00Z',householdId:30,groupId:10}];
-  else if(q.includes('e.exitDate AS projectExitDate'))rows=[1,2].map(clientId=>({clientId,enrollmentId:clientId===1?10:11,projectExitDate:null,destination:null,destinationCode:null,reasonForLeaving:null,reasonForLeavingCode:null,exitSubgroupId:null}));
+  else if(q.includes('e.exitDate AS projectExitDate'))rows=[1,2].map(clientId=>({clientId,enrollmentId:clientId===1?10:11,projectExitDate:implicit&&clientId!==target?'2026-11-09T16:00:00Z':null,destination:null,destinationCode:null,reasonForLeaving:null,reasonForLeavingCode:null,exitSubgroupId:null}));
   else if(q.includes('e.groupId ='))rows=[{clientId:1,enrollmentId:10},{clientId:2,enrollmentId:11}];
   return {status:200,body:wire(rows)};
  },route:async(_,fn)=>{handler=fn;},unroute:async(_,fn)=>{assert.equal(handler,fn);handler=undefined;}};
