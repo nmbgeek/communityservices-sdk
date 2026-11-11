@@ -68,6 +68,15 @@ test('manual household adoption rejects an incomplete cohort and orphaned head c
   await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'manual',householdId:30,headClientId:1,members:orphaned?members:members.slice(0,1)}));assert.equal(f.journal.size,0);
  }
 });
+test('adopted household keys support household interims and per-member scalar corrections',async()=>{
+ for(const action of ['interim','correction']){
+  const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.journal.clear();
+  const adopted=await f.workflow().adoptHouseholdEnrollment({key:'adopted',householdId:30,headClientId:1,members:f.entries.map(({clientId,enrollmentId})=>({clientId,enrollmentId}))});
+  if(action==='interim'){const result=await f.workflow().createHouseholdInterim({...interimInput(),enrollmentKey:'adopted'});assert.equal(result.members.length,2);}
+  else{f.api.assessments.create=async({path,body,query})=>{for(const q of body)f.clients.get(path.clientId).history.push({field:q.virt_field_name,value:q.answer_value||null,date:query.dateEffective});};await f.workflow().correctEntry({key:'correct',enrollmentKey:adopted.members.find(m=>m.clientId===2).key,clientId:2,answers:{TOTAL:{value:12}}});assert.equal(f.clients.get(2).history.at(-1).value,'12');}
+  assert.equal(f.counts.entry,1);assert.equal(f.counts.attach,1);
+ }
+});
 
 test('a household member can correct only their scalars and preserve a retry of the original household entry',async()=>{
  const f=fixture(),entry=await f.workflow().createHouseholdEnrollment(entryInput()),beforeRows=structuredClone([...f.clients].map(([id,c])=>[id,c.rows])),headHistory=structuredClone(f.clients.get(1).history);let standardWrites=0;

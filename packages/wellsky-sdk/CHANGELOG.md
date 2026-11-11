@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 - 2026-11-10
+
+- Reject yes/no fields in `correctEntry.clear` before any correction write or new journal entry. Correct synthetic fixtures that incorrectly accepted blank yes/no values. Setting `No` remains supported.
+- Surface correction HTTP status and preserve allowlisted kind/status across retries without journaling response bodies. Retain write and read causes when reconciliation also fails.
+- Add explicit `resolveEntryCorrection` with independent confirmation and two unchanged-state checks. Preserve attempted history, refuse partial/verified commits, and require a new key for corrected intent after rejection. Never reset a sent request automatically from a 4xx response.
+- Clarify shared answers across assessment instruments, the public GWT enrollment catalog, and adoption for interims and scalar corrections. HUD label resolution and household-ID discovery still require authoritative metadata.
+- Correct password recovery documentation: WellSky permits immediately resetting back to the previous password.
+
 ## 0.5.0 - 2026-11-10
 
 - Use a configured GWT enrollment catalog for creation and member preflight. Prior household enrollments, including exited entries, no longer force the known-broken REST grouped list. Failed or incomplete reads never imply absence.

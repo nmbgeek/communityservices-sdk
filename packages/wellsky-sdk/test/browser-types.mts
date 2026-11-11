@@ -60,6 +60,9 @@ const enrollmentWorkflow=createEnrollmentWorkflow({api,store,birthDates,helpers:
 const individualExit:Promise<import('@choiceapps/communityservices-sdk/browser').ExitEnrollmentResult>=enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',destination:'Rental by client',reasonForLeaving:'Completed program',assessment:{}});
 void individualExit;
 void enrollmentWorkflow.correctEntry({key:'correction',enrollmentKey:'entry',clientId:1,answers:{SCORE:{value:12}},clear:['OLD_PATH'],subassessments:[{key:'original-row',parentField:'ROWS',answers:{TYPE:{option:{code:'NEW'}}},clear:['DETAILS']}]});
+void enrollmentWorkflow.resolveEntryCorrection({key:'correction',enrollmentKey:'entry',clientId:1,evidenceReference:'independent-review',confirmNotApplied:async evidence=>{const matches:true=evidence.matchesBefore;void matches;return false;}});
+// @ts-expect-error A state match alone is not independent confirmation of non-application.
+void enrollmentWorkflow.resolveEntryCorrection({key:'correction',enrollmentKey:'entry',clientId:1,evidenceReference:'review'});
 void enrollmentWorkflow.adoptEnrollment({key:'manual-entry',clientId:1,enrollmentId:2});
 void enrollmentWorkflow.adoptHouseholdEnrollment({key:'manual-household',householdId:3,headClientId:1,members:[{clientId:1,enrollmentId:2},{clientId:4,enrollmentId:5}]});
 void session.enrollmentSession.listEnrollments({clientId:1});

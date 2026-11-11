@@ -39,7 +39,7 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 | Client Notes, goals, action steps | `createCasePlans` plus raw REST methods | Journaled create/update and supported-field verification; helper supplies clientId on goal updates; unreadable follow-up fields excluded |
 | Goal case notes | `session.workflows.createCaseNote` | Optional source key rejects changed intent and verifies saved note ID; legacy unkeyed matching remains; single client only. REST goal response does not expose these notes |
 | Multi-client/multi-case notes | No packaged bulk helper | Do not infer note participants from unrelated `households` nested in a goal response |
-| Expired UI password | Headless login, enabled by default | Temporary suffix then restore original, durable recovery stages, fresh-login verification; policy rejection may leave temporary password active |
+| Expired UI password | Headless login, enabled by default | Temporary suffix then restore original, durable recovery stages, fresh-login verification; WellSky permits immediate restoration of the previous password |
 | Session expiration | Managed session plus durable workflow journals | Reauthenticate and report interruption; caller retries original intent for reconciliation, not automatic callback replay |
 
 ## Known server gaps
@@ -69,7 +69,7 @@ These observations explain the current contracts. They are dated acceptance resu
 | Household exits and head coverage, October 23, 2026 | An invalid early head exit was blocked before writes. Valid staggered exits and an all-member exit preserved dates, original heads, and selected subgroups; retries made no extra record writes. | Earlier server-accepted orphaned groups were invalid under the current SDK contract. See [head validation feedback](vendor-issues/household-head-validation.md) and [enrollments](enrollments.md). |
 | Attachment identity and content, October 24, 2026 | Profile, Case Plans, and goal files retained their IDs across fresh helpers, and downloaded bytes matched the originals. | Does not establish anonymous access or sharing permissions. REST authentication remained a separate failure. See [files and notes](files-and-notes.md). |
 | SSVF conditional forms, October 23, 2026 | Form inspection checked conditional branches and required-date validation without saving; four REST-supported dependencies were then saved and read back, with zero duplicate writes on same-key retries. | This is a dated rules snapshot, not exhaustive financial assistance or funding-allocation acceptance. See [SSVF rules](../SSVF.md) and [services](services.md). |
-| Expired-password recovery, October 23, 2026 | An expired account completed temporary-password recovery, restored its original password, and authenticated in a fresh context. | Account policy can reject a recovery stage; retain the durable recovery journal. See [browser sessions](browser-session.md). |
+| Expired-password recovery, October 23, 2026 | An expired account completed temporary-password recovery, restored its original password, and authenticated in a fresh context. | WellSky permits immediate restoration of the previous password; retain the durable recovery journal for interrupted operations. See [browser sessions](browser-session.md). |
 
 Independent needs and AIRS/service-type discovery use UI/GWT helpers. See [independent needs](independent-needs.md) for the creation, counted catalog, and retry contracts. The pinned Swagger exposes need reads but no independent-need creation.
 

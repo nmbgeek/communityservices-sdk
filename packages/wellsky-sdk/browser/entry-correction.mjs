@@ -6,6 +6,12 @@ const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.k
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
 const positive=v=>Number.isSafeInteger(v)&&v>0;
 const scalarTypes=new Set(['lookup','yes_no','date','int','money','textbox','textarea']);
+export function correctionFailureDetails(error){
+ const failure={};
+ if(Number.isInteger(error?.status)&&error.status>=100&&error.status<=599)failure.status=error.status;
+ if(['http','auth','timeout','network','aborted','protocol','validation','throttled','cooldown'].includes(error?.kind))failure.kind=error.kind;
+ return failure;
+}
 
 /** Internal correction writer. The workflow supplies its existing client locks and journal scopes. */
 export function createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,scope,reservationScope,makeError}){
@@ -21,6 +27,8 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
  const encode=(questions,answers,clear,endpoint)=>{
   if(!object(answers)||!Array.isArray(clear)||new Set(clear).size!==clear.length||clear.some(f=>typeof f!=='string'||Object.hasOwn(answers,f)))fail('invalid or conflicting correction answers and clears');
   const index=new Map(questions.map(q=>[q.fieldName,q]));
+  const unsupportedClears=clear.filter(field=>index.get(field)?.questionType==='yes_no');
+  if(unsupportedClears.length)throw makeError('yes/no answers cannot be cleared',{code:'UNSUPPORTED_YES_NO_CLEAR',fields:unsupportedClears});
   for(const field of [...Object.keys(answers),...clear]){
    const q=index.get(field);
    if(!q||!scalarTypes.has(q.questionType)||endpoint==='mobile'&&q.questionType==='yes_no')fail('unsupported correction field type');
@@ -42,9 +50,12 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
   if(rows.some(q=>!object(q)||typeof q.virt_field_name!=='string')||new Set(rows.map(q=>q.virt_field_name)).size!==rows.length)fail('ambiguous correction assessment read');
   return rows;
  };
- return async raw=>{
-  fields(raw,['key','enrollmentKey','clientId','answers','clear','subassessments']);
-  const input=structuredClone(raw);key(input.key);key(input.enrollmentKey);
+ const run=async(mode,raw)=>{
+  const resolving=mode==='resolve';
+  fields(raw,resolving?['key','enrollmentKey','clientId','evidenceReference','confirmNotApplied']:['key','enrollmentKey','clientId','answers','clear','subassessments']);
+  const {confirmNotApplied,...serializable}=raw;
+  const input=structuredClone(serializable);key(input.key);key(input.enrollmentKey);
+  if(resolving){key(input.evidenceReference);if(typeof confirmNotApplied!=='function')fail('independent non-application confirmation required');}
   if(!positive(input.clientId)||!Array.isArray(input.subassessments??[]))fail('invalid correction client or rows');
   if(typeof api.assessments?.create!=='function'||typeof enrollmentSession?.readEnrollment!=='function')fail('standard assessment writes and authoritative enrollment reader required for corrections');
   return store.withLock(scope(input.clientId),async()=>{
@@ -52,11 +63,22 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'))fail('unfinished household workflow must be reconciled first');
    const records=await store.read(scope(input.clientId));
    if(!Array.isArray(records)||records.some(r=>!object(r)||r.version!==1||!object(r.steps)))fail('invalid workflow journal');
-   if(records.some(r=>r.stage!=='verified'&&r.key!==input.key))fail('another unfinished workflow must be reconciled first');
+   if(records.some(r=>r.stage!=='verified'&&!(r.kind==='correction'&&r.stage==='rejected')&&r.key!==input.key))fail('another unfinished workflow must be reconciled first');
    const entries=records.filter(r=>r.kind==='entry'&&r.key===input.enrollmentKey&&r.stage==='verified');
    if(entries.length!==1)fail('verified enrollment workflow required');const entry=entries[0];
    const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate correction journal keys');let record=matches[0];
-   const intentHash=hash(input);if(record&&(record.kind!=='correction'||record.intentHash!==intentHash))fail('correction key conflicts with previous intent');
+   const intentHash=hash(input);
+   if(resolving){
+    if(!record||record.kind!=='correction'||record.enrollmentKey!==input.enrollmentKey)fail('matching correction journal required');
+    if(record.stage==='verified')fail('verified correction cannot be rejected');
+    if(record.stage==='rejected'){
+     if(record.resolution?.evidenceReference!==input.evidenceReference)fail('resolution evidence reference changed');
+     return {key:input.key,enrollmentKey:input.enrollmentKey,clientId:input.clientId,outcome:'already-rejected',resolution:structuredClone(record.resolution)};
+    }
+   }else{
+    if(record?.kind==='correction'&&record.stage==='rejected')throw makeError('correction was resolved as not applied; use a new key for a corrected intent',{code:'ENTRY_CORRECTION_REJECTED'});
+    if(record&&(record.kind!=='correction'||record.intentHash!==intentHash))fail('correction key conflicts with previous intent');
+   }
    if(!record&&records.some(r=>r.enrollmentId===entry.enrollmentId&&!['entry','correction'].includes(r.kind)))fail('entry correction must precede interim or exit workflows');
    const {providerId,type,entryDate}=entry.context,at=new Date(parseRestInstant(entryDate)).toISOString(),readAt=new Date(parseRestInstant(at)+1000).toISOString();
    const target={clientId:input.clientId,enrollmentId:entry.enrollmentId};
@@ -99,6 +121,17 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
     return {raw,scalars,rows};
    };
    const observed=await snapshot();
+   if(resolving){
+    if(record.stage!=='pending'||!Object.values(record.steps).some(s=>s.state==='attempted'))fail('attempted correction required for resolution');
+    const unchanged=state=>canonical({scalars:state.scalars,rows:state.rows})===canonical(record.before);
+    if(!unchanged(observed))fail('correction state differs from its pre-write snapshot; non-application cannot be resolved');
+    const evidence={clientId:input.clientId,enrollmentId:entry.enrollmentId,enrollmentKey:input.enrollmentKey,key:input.key,effectiveDate:at,matchesBefore:true,steps:Object.entries(record.steps).map(([name,s])=>({name,state:s.state,...(s.failure?{failure:correctionFailureDetails(s.failure)}:{})}))};
+    if(await confirmNotApplied(evidence)!==true)fail('independent non-application confirmation required');
+    await verifyEnrollment();if(!unchanged(await snapshot()))fail('correction state changed during resolution');
+    record.resolution={kind:'not-applied',evidenceReference:input.evidenceReference,resolvedAt:new Date().toISOString()};record.stage='rejected';
+    await store.write(scope(input.clientId),structuredClone(records));
+    return {key:input.key,enrollmentKey:input.enrollmentKey,clientId:input.clientId,outcome:'rejected',resolution:structuredClone(record.resolution)};
+   }
    const readOverrides=state=>{
     for(const q of Object.values(entry.correctedScalars??{})){
      const actual=state.scalars[q.virt_field_name];if(!actual||actual.value!==value(q.question_type,q.answer_value)||actual.value!==null&&actual.date!==parseRestInstant(at))fail('verified entry correction changed');
@@ -145,12 +178,19 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
     return scalarsMatch&&canonical(state.rows)===canonical(want.rows);
    };
    const step=async(name,submit)=>{
-    if(await inspect(name)){record.steps[name]={state:'verified'};await persist();return;}
-    if(record.steps[name])throw makeError('uncertain entry correction requires reconciliation',{step:name});
+    const uncertain=cause=>makeError('uncertain entry correction requires reconciliation',{step:name,code:'ENTRY_CORRECTION_UNCERTAIN',status:record.steps[name]?.failure?.status,...(cause===undefined?{}:{cause})});
+    let found;try{found=await inspect(name);}catch(readError){if(record.steps[name])throw uncertain(readError);throw readError;}
+    if(found){record.steps[name]={state:'verified'};await persist();return;}
+    if(record.steps[name])throw uncertain();
     if(!await inspect(null))fail('entry changed since correction preflight');
     await verifyEnrollment();record.steps[name]={state:'attempted'};await persist();let cause;
-    try{await submit();}catch(e){cause=e;}
-    if(!await inspect(name))throw makeError('uncertain entry correction requires reconciliation',{step:name,cause});
+    try{await submit();}catch(e){
+     cause=e;const failure=correctionFailureDetails(e);
+     if(Object.keys(failure).length){record.steps[name].failure=failure;await persist();}
+    }
+    let saved;
+    try{saved=await inspect(name);}catch(readError){throw uncertain(cause===undefined?readError:new AggregateError([cause,readError],'Correction write and reconciliation read failed'));}
+    if(!saved)throw uncertain(cause);
     record.steps[name]={state:'verified'};await persist();
    };
    if(record.scalarBody.length)await step('scalars',()=>api.assessments.create({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at},body:record.scalarBody}));
@@ -161,4 +201,5 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    record.stage='verified';await persist();return result('verified');
   });
  };
+ return {correctEntry:raw=>run('correct',raw),resolveEntryCorrection:raw=>run('resolve',raw)};
 }

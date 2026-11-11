@@ -29,7 +29,7 @@ The default metadata cache TTL is 60 seconds with 100 entries per client. Config
 
 WellSky requires a client context and known assessment code for these reads. There is no documented global assessment-list or standalone picklist-list endpoint. Mobile option metadata has no effective-date filter, so definitions explicitly identify its options as current even when the generic assessment read is dated. Metadata also does not provide a complete questionnaire branching engine.
 
-Use the raw `assessments.get`, `assessmentsMobile.getAnswers`, and `enrollments.getAssessment` methods for recorded answers. Use `encodeAnswers` and `encodeNewSubassessmentRow` for endpoint-specific encoding. Mobile lookups use option IDs; standalone/enrollment lookups require an explicit `writeLabel` resolver with tenant-verified labels. Raw option names are not assumed to be valid write labels. Provider answers are refused for mobile writes because that endpoint can silently discard them. Answer-state code mappings and multi-value serialization are caller-supplied; a refusal is never converted to `No`.
+Use the raw `assessments.get`, `assessmentsMobile.getAnswers`, and `enrollments.getAssessment` methods for recorded answers. Use `encodeAnswers` and `encodeNewSubassessmentRow` for endpoint-specific encoding. Mobile lookups use option IDs; standalone/enrollment lookups require an explicit `writeLabel` resolver with tenant-verified labels. Raw option names are not assumed to be valid write labels. Some HUD-marked choices require `(HUD)` in the full write label even when metadata `name` omits it. Do not infer this from trailing whitespace or append the suffix to every option. Continue supplying tenant-verified labels until a label resolver has authoritative metadata; recorded `answer_value_text` is useful evidence for the corresponding option. Provider answers are refused for mobile writes because that endpoint can silently discard them. Answer-state code mappings and multi-value serialization are caller-supplied; a refusal is never converted to `No`.
 
 ## Yes/no answer acceptance
 
@@ -47,6 +47,12 @@ Reproduced on November 2, 2026 in a sandbox tenant with synthetic clients:
 - **The mobile date correction does not apply to standard writes.** A standard create sent the uncorrected instant and stored it unchanged.
 
 The enrollment workflow writes yes/no answers through the mobile batch by default. That keeps their stage pending because the saved values never verify. Construct it with `yesNoWrites: 'standard'` and a `writeLabel` resolver to send them through `assessments.create` instead; see [the enrollment workflow](enrollments.md#yesno-answers). It never treats an empty yes/no answer as `No`, skips a requested field, or switches endpoints for a stage that was already attempted. For a minimal reproduction, [enable private error diagnostics](troubleshooting.md#inspect-an-upstream-error-privately) and retain the question's current metadata.
+
+## Shared questions across assessment instruments
+
+An entry assessment and a standalone form can reference the same stored question. Changing `assessmentCode` does not make a second answer at the same client/question/effective instant available for a mobile insert. The integrator reported this for `HPTARGETINGSCORETOTAL` on an entry and form 1002: when the stored value differed, the mobile batch was rejected. Compare question identifiers and effective dates, not only form names.
+
+Read the existing answer before planning a mobile scalar insert. If it already exists at that instant with another value, use a supported standard correction/update path after resolving the original operation; do not move its timestamp to evade the collision. Raw `assessmentsMobile.addAnswer` remains a raw write and performs no implicit read or cross-form collision check. Never switch endpoints to retry an uncertain batch.
 
 ## Race and ethnicity combinations
 

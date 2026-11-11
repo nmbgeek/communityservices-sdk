@@ -79,6 +79,28 @@ export interface EntryCorrectionInput {
  subassessments?:EntryRowCorrection[];
 }
 export interface EntryCorrectionResult extends EnrollmentWorkflowResult {enrollmentKey:string;}
+export interface EntryCorrectionFailure {
+ status?:number;
+ kind?:'http'|'auth'|'timeout'|'network'|'aborted'|'protocol'|'validation'|'throttled'|'cooldown';
+}
+export interface EntryCorrectionResolution {
+ kind:'not-applied';evidenceReference:string;resolvedAt:string;
+}
+export interface EntryCorrectionResolutionEvidence {
+ key:string;enrollmentKey:string;clientId:number;enrollmentId:number;effectiveDate:string;matchesBefore:true;
+ steps:Array<{name:string;state:'attempted'|'verified';failure?:EntryCorrectionFailure}>;
+}
+export interface ResolveEntryCorrectionInput {
+ key:string;enrollmentKey:string;clientId:number;
+ /** Opaque reference to independent non-application evidence, not a response body. */
+ evidenceReference:string;
+ /** Read-only confirmation using independent server/administrative evidence.
+  * A 4xx response plus matchesBefore alone is not sufficient. */
+ confirmNotApplied:(evidence:EntryCorrectionResolutionEvidence)=>boolean|Promise<boolean>;
+}
+export interface ResolveEntryCorrectionResult {
+ key:string;enrollmentKey:string;clientId:number;outcome:'rejected'|'already-rejected';resolution:EntryCorrectionResolution;
+}
 export interface AdoptEnrollmentInput {key:string;clientId:number;enrollmentId:number;}
 export interface AdoptHouseholdEnrollmentInput {
  key:string;householdId:number;headClientId:number;
@@ -105,14 +127,15 @@ export interface ExitWorkflowDiscovery extends EnrollmentWorkflowDiscovery {exit
 export interface EnrollmentWorkflowStatus {
   key:string;
   kind:'entry'|'interim'|'exit'|'correction';
-  stage:'pending'|'verified';
+  stage:'pending'|'verified'|'rejected';
   assessmentCode:string;
   enrollmentId?:number;
   reviewId?:number;
   projectExitDate?:string;
   exitSubgroupId?:string|null;
   recordsetIds:Record<string,number>;
-  steps:{name:string;state:'attempted'|'verified'}[];
+  steps:{name:string;state:'attempted'|'verified';failure?:EntryCorrectionFailure}[];
+  resolution?:EntryCorrectionResolution;
 }
 export interface EnrollmentWorkflow {
   discover(input:EnrollmentDiscoveryInput):Promise<EnrollmentWorkflowDiscovery>;
@@ -123,6 +146,8 @@ export interface EnrollmentWorkflow {
   exitEnrollment(input:ExitEnrollmentInput):Promise<ExitEnrollmentResult>;
   /** Patch an open entry at its original timestamp, before any review or exit. */
   correctEntry(input:EntryCorrectionInput):Promise<EntryCorrectionResult>;
+  /** Verify unchanged state and independently confirmed rejection; keeps the attempt history. */
+  resolveEntryCorrection(input:ResolveEntryCorrectionInput):Promise<ResolveEntryCorrectionResult>;
   /** Verify an existing standalone entry and journal it without an HMIS write. */
   adoptEnrollment(input:AdoptEnrollmentInput):Promise<EnrollmentWorkflowResult>;
   /** Verify all existing linked entries, original head and dates; no HMIS writes. */
@@ -217,9 +242,12 @@ export interface EnrollmentWorkflowOptions {
 }
 export class EnrollmentWorkflowError extends Error {
   readonly reason:string;
+  readonly code?:string;
+  readonly fields?:string[];
+  readonly status?:number;
   /** Failed durable stage, when known. The original write error is available as cause in memory. */
   readonly step?:string;
-  constructor(reason:string,options?:ErrorOptions&{step?:string});
+  constructor(reason:string,options?:ErrorOptions&{step?:string;code?:string;fields?:string[];status?:number});
 }
 /** An unavailable list is never evidence that no enrollment exists. */
 export class EnrollmentReadError extends EnrollmentWorkflowError {

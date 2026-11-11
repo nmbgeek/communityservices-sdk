@@ -148,13 +148,35 @@ const corrected = await workflow.correctEntry({
 });
 ```
 
-`answers` uses the ordinary answer and option selectors. `clear` explicitly removes a recorded value; an omitted field stays unchanged. Clearing a yes/no answer is distinct from answering `No`. Do not use `notApplicable` to clear an old answer. Every row key must identify an existing row returned by the original entry operation. The correction never creates a second row, deletes a row, or changes the enrollment date.
+`answers` uses the ordinary answer and option selectors. `clear` explicitly removes a recorded value; an omitted field stays unchanged. Yes/no fields cannot appear in `clear`: the SDK throws `UNSUPPORTED_YES_NO_CLEAR`, with the affected `fields`, before any correction write or new journal record. Use `{value: false}` to answer `No`; it does not mean blank. No alternative yes/no blanking route has been verified. Do not use `notApplicable` to clear an old answer. Every row key must identify an existing row returned by the original entry operation. The correction never creates a second row, deletes a row, or changes the enrollment date.
 
-Scalars use the standard assessment endpoint, which supports same-date updates. The batch includes every mandatory scalar, preserving its current value unless the patch explicitly answers or clears it. Missing mandatory values require an explicit answer or clear; lookup values require verified write labels. Readback checks one second after the original instant so stored yes/no values are visible.
+Scalars use the standard assessment endpoint, which supports same-date updates. The batch includes every mandatory scalar, preserving its current value unless the patch explicitly answers or clears it. Missing mandatory values require an explicit answer, or an explicit clear for a supported non-yes/no type; lookup values require verified write labels. Readback checks one second after the original instant so stored yes/no values are visible.
 
 Row edits send only the changed cells to the existing recordset through the mobile endpoint. Lookup, text, numeric and date cells are supported; provider and yes/no row cells are refused before any write. Untouched cells, all other rows and row IDs must remain unchanged. DOB and household-head changes require their dedicated workflows and cannot be supplied as corrections here. An unmodified mandatory DOB is also refused because the standard batch cannot safely resend it through the DOB helper.
 
 All changes are validated before the first write. Scalar and row batches have separate journal stages, so a partial correction is not rolled back. Retry the same intent and key to reconcile; an uncertain batch is never resent automatically. `getStatus({clientId, key})` reports correction progress. Verified corrections update the original entry's verification expectations, so retrying `createEnrollment` under its old key does not restore the old path. A later correction uses a new correction key. See the [typed example](../examples/entry-correction-workflow.mts).
+
+## Resolve a rejected correction
+
+An attempted correction stays pending until its outcome is established. A 4xx response or an unchanged read alone does not prove non-application, so the SDK does not automatically reset or resend it. New failures expose `code: 'ENTRY_CORRECTION_UNCERTAIN'`, `step`, and an available HTTP `status`. The first failure retains its original `cause`; a failed reconciliation read retains both errors in an `AggregateError`. Only allowlisted failure kind/status are persisted and returned by `getStatus`. Response bodies, messages, credentials and stacks are not written to the journal. Older journals cannot recover diagnostics they never saved.
+
+If independent server or administrative evidence establishes that an attempted correction was not applied, call:
+
+```ts
+await workflow.resolveEntryCorrection({
+  key: failedCorrectionKey,
+  enrollmentKey,
+  clientId,
+  evidenceReference: independentReviewReference,
+  confirmNotApplied: async evidence => rejectionReview.confirmNotApplied(evidence),
+});
+```
+
+`rejectionReview` is application-owned. Its callback must be read-only and confirm non-application from independent evidence; do not implement it as `() => true` or infer its answer only from HTTP status and `matchesBefore`. The callback receives identities, effective date and sanitized step diagnostics. Do not call the same client's workflow methods from the callback: the client journal lock remains held.
+
+The SDK verifies the complete saved pre-write state before and after confirmation and rechecks enrollment context. A partial application, changed state or unavailable read prevents resolution. Successful resolution marks the correction `rejected` while retaining its original intent, attempted steps, diagnostics and evidence reference. It makes no SDK record writes to WellSky. Repeating the same resolution returns `already-rejected`; submitting that correction key again throws `ENTRY_CORRECTION_REJECTED`. Use a new correction key for the corrected intent only after resolution. A verified successful correction cannot be rejected.
+
+This also supports pending 0.5.0 journals, including those without failure metadata, when the required independent evidence exists. A new validation failure that occurs before journaling needs no resolution.
 
 ## Household enrollment and interim assessments
 
@@ -196,6 +218,22 @@ Client locks coordinate overlapping household and single-client operations. Dura
 
 See the typed [household example](../examples/household-enrollment-workflow.mts) and [live household verification](capabilities.md). The integration uses the configured tenant and uses an isolated authenticated page.
 
+## Public enrollment reads
+
+The managed session exposes a GWT-backed catalog independently of the workflow:
+
+```ts
+const {values: enrollments} =
+  await session.enrollmentSession.listEnrollments({clientId});
+
+const detail = await session.enrollmentSession.readEnrollment({
+  clientId: headClientId, enrollmentId: headEnrollmentId,
+});
+// detail.members contains the complete linked clientId/enrollmentId pairs.
+```
+
+Use the session returned by `openEnrollmentSession`. Lists include open and exited entries, validate complete counts, and refuse more than 1,000 records. The detail read currently exposes `householdClientIds`, not `householdId`; these client IDs and the enrollment's group are not interchangeable with a household ID. Household adoption still requires an explicitly verified household ID.
+
 ## Individual enrollment exits
 
 Use `exitEnrollment` to end a standalone person's program enrollment. It requires a verified `createEnrollment` entry in the same durable store. Supply `enrollmentSession: session.enrollmentSession` and `exitUi: createHouseholdExitUi({page: session.page})` when constructing the workflow. The same exit UI port serves individual and household forms.
@@ -226,7 +264,7 @@ Use `adoptEnrollment({key, clientId, enrollmentId})` for a standalone enrollment
 
 Adoption writes only to the local durable journal. It does not create, attach, exit or modify an HMIS record. Later entrants retain their own original entry dates. An enrollment already tracked under another entry key is rejected; use its existing key. Retry an interrupted adoption with the same inputs and store.
 
-After adoption, pass its key as `enrollmentKey` to `exitEnrollment` or `exitHousehold`. Exit assessment plans and normal household head rules still apply. Adoption records existing enrollment identities, not historical subassessment row-key mappings, so its returned `recordsetIds` is empty. It cannot identify rows for `correctEntry` by a new invented key. See [manual-entry exit examples](../examples/existing-enrollment-exits.mts).
+After standalone adoption, its key can be used as `enrollmentKey` for `createInterim`, scalar-only `correctEntry`, or `exitEnrollment`. After household adoption, the group key works with `createHouseholdInterim` and `exitHousehold`; use the returned member's `key` for that person's scalar-only `correctEntry`. Correction still requires an open entry without reviews or exits. Do not use an all-not-applicable `createEnrollment` call merely to link an existing entry: it can create an enrollment when no match exists. Exit assessment plans and normal household head rules still apply. Adoption records existing enrollment identities, not historical subassessment row-key mappings, so its returned `recordsetIds` is empty. It cannot identify rows for `correctEntry` by a new invented key. See [manual-entry exit examples](../examples/existing-enrollment-exits.mts).
 
 ## Household exits
 
