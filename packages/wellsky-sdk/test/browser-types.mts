@@ -93,3 +93,14 @@ void plans.updateGoal({key:'goal-update',clientId:1,recordId:3,values:{goalDescr
 void plans.createActionStep({key:'action-source',clientId:1,goalId:3,values:{providerId:2,dateSet:'2026-10-20T16:00:00Z',actionStep:'Synthetic step',status:'In Progress'}});
 void session.workflows.createCaseNote({key:'case-note-source',clientId:1,goalId:3,providerId:2,noteDate:'2026-10-24',note:'Synthetic'});
 void session.enrollmentSession.readPicklistOptions({clientId:1,optionIds:[1,2]});
+import {entryExitTypes,MemberEntryDateInputError,createMemberEntryDatePort,type MemberEntryDatePlan} from '../browser/index.mjs';
+const everyTypePort=createMemberEntryDatePort({api,enrollmentSession:session.enrollmentSession});
+for(const type of entryExitTypes){
+ const plan:MemberEntryDatePlan={providerId:1,type,entryDate:'2026-11-11T16:00:00Z',memberClientIds:[2],cohortClientIds:[1,2]};
+ void everyTypePort.validateMemberEntryDatePlan(plan);
+}
+// @ts-expect-error Unknown Entry/Exit types must fail at the type boundary.
+const unknownEntryTypePlan:MemberEntryDatePlan={providerId:1,type:'Unknown',entryDate:'2026-11-11T16:00:00Z',memberClientIds:[2],cohortClientIds:[1,2]};
+const memberInputError=new MemberEntryDateInputError('invalid input');
+const noMemberWrite:false=memberInputError.committed;
+void unknownEntryTypePlan;void noMemberWrite;

@@ -29,7 +29,7 @@ REST form metadata includes question paths, mandatory flags, current option IDs/
 
 `createEnrollmentWorkflow` composes the provider catalog, current program assessment defaults, question/picklist metadata, REST enrollment and answer writes, and the durable GWT interim helper. It accepts an **existing client ID**. It does not create clients or infer program eligibility, answers, conditional applicability, or which verification types a program requires.
 
-The workflow's `EntryExitType` accepts `HUD`, `Basic`, `Standard`, `RHY`, `VA`, `Basic Center Program Entry/Exit`, `PATH`, `Quick Call`, and `Transitional Living Program Entry/Exit`. `type` identifies the Entry/Exit category; `assessmentCode` identifies its assessment instrument. The workflow sends the selected type unchanged to REST. The generated REST methods accept a string; neither contract guarantees that the server permits every type for a given provider.
+The shared `entryExitTypes` constant and `EntryExitType` type are used by both the workflow and member-entry-date port. They accept `HUD`, `Basic`, `Standard`, `RHY`, `VA`, `Basic Center Program Entry/Exit`, `PATH`, `Quick Call`, and `Transitional Living Program Entry/Exit`. `type` identifies the Entry/Exit category; `assessmentCode` identifies its assessment instrument. The workflow sends the selected type unchanged to REST. The generated REST methods accept a string; neither contract guarantees that the server permits every type for a given provider.
 
 HUD and VA retain built-in provider display locations. For another type, supply `assessmentLocations` when constructing the workflow. First inspect `getProviderAssessments({providerId}).defaults`, including each item's `label`, then map the desired type's entry, interim, and optional exit phases to their exact `location` values. These values are display-control identifiers, not assessment names, IDs, or codes. The workflow resolves the instruments from fresh provider discovery on every operation. It rejects missing, duplicate, unset, or unresolved defaults before record writes and never falls back to another type.
 
@@ -46,7 +46,7 @@ const workflow = createEnrollmentWorkflow({
 });
 ```
 
-`assessmentLocations` is a partial map keyed by `EntryExitType`. Each supplied mapping requires nonempty `entry` and `interim` locations; `exit` is required for `discoverExit` and household exits. A supplied HUD or VA mapping replaces that type's built-in mapping. Keep the same configuration across retries and use separate workflow instances when providers need different location mappings. Existing journal checks still reject changed instruments or definitions. Additional types have synthetic workflow coverage, not new live acceptance evidence. The November 2, 2026 report of type rejection was traced to the SDK's former HUD/VA restriction, not a reproduced WellSky server failure.
+`assessmentLocations` is a partial map keyed by `EntryExitType`. Each supplied mapping requires nonempty `entry` and `interim` locations; `exit` is required for `discoverExit` and household exits. A supplied HUD or VA mapping replaces that type's built-in mapping. Keep the same configuration across retries and use separate workflow instances when providers need different location mappings. Existing journal checks still reject changed instruments or definitions. All nine types have synthetic entry, later-member, selected-member interim and exit coverage, including uncertain-write guards. Live checks have verified Standard UI preparation and member-date validation; they do not certify every provider's configuration for every type. The November 2, 2026 report of type rejection was traced to the SDK's former HUD/VA restriction, not a reproduced WellSky server failure.
 
 ```ts
 import {
@@ -217,6 +217,12 @@ All member plans are validated before record creation. The workflow creates the 
 Client locks coordinate overlapping household and single-client operations. Durable household reservations block unrelated work after partial completion. A failed attachment, review or answer batch must be reconciled with the same keys and journal; no uncertain mutation is automatically resent. `getHouseholdStatus({headClientId,key})` reports local member progress and generated member keys, which can be passed to `getStatus({clientId,key})`. This is a resumable sequence, not an atomic transaction. The file store fails closed on a concurrent writer or leftover crash lock; inspect and reconcile such a lock before removing it.
 
 See the typed [household example](../examples/household-enrollment-workflow.mts) and [live household verification](capabilities.md). The integration uses the configured tenant and uses an isolated authenticated page.
+
+### Single-member household reviews and pending review recovery
+
+A household interim may select exactly one enrolled member, including a non-head member or the only member still open. The UI can use `createEntryExitReview` for that single selection; a group RPC with one participant is also accepted. Multiple selected members require the group RPC. Preparation checks the final selection after configuring the review type/date, and verification requires the saved review's participant set to match exactly. Unselected members do not need no-op assessment plans.
+
+For the pending single-member reviews reported against 0.9.1, upgrade and retry the original `createHouseholdInterim` input with the same key and durable store. The old built-in adapter aborted the single-member save request and failed during preparation; the GWT send-attempt journal is written only after preparation and validation succeed. An existing matching review is reused. A genuinely attempted but unverified write remains pending and is never resent automatically. A broader or different review created independently at that instant requires reconciliation; do not change keys or delete journals to bypass the conflict.
 
 ## Public enrollment reads
 
@@ -398,6 +404,17 @@ The workflow discovers and pins the new member's assessments, attaches the membe
 Retries can verify an earlier entry, addition or exit after later household changes without creating duplicates. All cooperating writers must share the durable store. External changes to enrollment identity, selected exit membership, or pending-operation preserved state cause a conflict. The UI adapter scopes checkbox selection to the active dialog because the additional-members popup can overlay another visible household tree.
 
 See the [typed lifecycle example](../examples/household-lifecycle-workflow.mts) and [sandbox verification](capabilities.md).
+
+### Member-date preflight and recovery
+
+SDK 0.10.0 accepts all nine UI Entry/Exit types in `createMemberEntryDatePort`, using the same exported `entryExitTypes` contract as the workflow. The port still sends only `{projectStartDate}` in its date update; changing the type is not part of that request. Existing cohort members may already be exited; only the target must remain open, and every other member's dates and exit metadata must remain unchanged.
+
+Before attachment or a new operation journal is written, the workflow calls `validateMemberEntryDatePlan({providerId, type, entryDate, memberClientIds, cohortClientIds})`. This validates the inputs available before new enrollment IDs exist. The default port implements it automatically. **Custom ports must now implement this read-only method**, in addition to `validateMemberEntryDate` and `saveMemberEntryDate`; a missing method fails before attachment. Keep post-attachment validation too: new IDs, current server state and review chronology can only be verified afterwards. See [the typed preflight example](../examples/member-entry-date-preflight.mts).
+
+Input refusals use `MemberEntryDateInputError` with `MEMBER_ENTRY_DATE_INPUT_INVALID` or `MEMBER_ENTRY_DATE_TYPE_UNSUPPORTED` and `committed: false`. Workflow failures from other custom plan checks use `MEMBER_ENTRY_DATE_PREFLIGHT_FAILED`. The workflow's overall marker remains `'unknown'` if the same operation previously attempted a write, even when its current failure is a validation refusal.
+
+For a 0.9.1 non-HUD/VA addition that attached the member and then failed the type check, upgrade and retry the **same `addHouseholdMembers` key, input and store**. The workflow reconciles the existing attachment, keeps its enrollment ID, and proceeds to the later entry date and assessment. The type check failed before the date-attempt marker, so that case can resume. If a date PUT was actually attempted and its outcome is uncertain, the SDK will not resend it; resolve the saved date through authoritative readback or staff review first. Creating another key or clearing the journal can duplicate or conflict with the existing attachment.
+
 
 ## Current Living Situation contacts
 

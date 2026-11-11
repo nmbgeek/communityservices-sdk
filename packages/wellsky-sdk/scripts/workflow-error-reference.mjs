@@ -7,7 +7,7 @@ const code=value=>/^[A-Z][A-Z0-9_]+$/.test(value);
 const property=(node,name)=>ts.isObjectLiteralExpression(node)?node.properties.find(p=>ts.isPropertyAssignment(p)&&p.name.getText()===name)?.initializer:undefined;
 
 /** Extract SDK-owned codes and reject new constant reasons without an explicit code. */
-export function collectWorkflowErrors(mapText,sources){
+export function collectWorkflowErrors(mapText,sources,codeOnlySources={}){
  const reasons=new Map(),entries=new Map(),unmapped=new Set();
  const add=(name,description)=>{if(!entries.has(name))entries.set(name,new Set());entries.get(name).add(description??name.toLowerCase().replaceAll('_',' '));};
  const map=parse('workflow-error-codes.mjs',mapText);
@@ -19,12 +19,12 @@ export function collectWorkflowErrors(mapText,sources){
   ts.forEachChild(node,visitMap);
  };
  visitMap(map);
- for(const [file,text]of Object.entries(sources)){
+ for(const [file,text]of Object.entries({...sources,...codeOnlySources})){
   const source=parse(file,text);
   const visit=node=>{
    if(ts.isPropertyAssignment(node)&&node.name.getText(source)==='code')for(const name of strings(node.initializer).filter(code))add(name);
    if(ts.isBinaryExpression(node)&&node.operatorToken.kind===ts.SyntaxKind.EqualsToken&&ts.isPropertyAccessExpression(node.left)&&node.left.name.text==='code')for(const name of strings(node.right).filter(code))add(name);
-   if((ts.isCallExpression(node)||ts.isNewExpression(node))&&ts.isIdentifier(node.expression)&&['fail','makeError','EnrollmentWorkflowError'].includes(node.expression.text)){
+   if(Object.hasOwn(sources,file)&&(ts.isCallExpression(node)||ts.isNewExpression(node))&&ts.isIdentifier(node.expression)&&['fail','makeError','EnrollmentWorkflowError'].includes(node.expression.text)){
     const args=node.arguments??[],first=strings(args[0]),explicit=strings(property(args[1]??{},'code'));
     // Row registration/discovery use fail(code, reason); the other guards use fail(reason, options).
     if(first.length&&first.every(code))for(const name of first)add(name,strings(args[1])[0]);
@@ -43,7 +43,7 @@ export function collectWorkflowErrors(mapText,sources){
 
 export function workflowErrorReference(){
  const files=['enrollment-workflow','entry-correction','entry-row-registration','household-enrollment-discovery'];
- const entries=collectWorkflowErrors(readFileSync('browser/workflow-error-codes.mjs','utf8'),Object.fromEntries(files.map(file=>[file,readFileSync(`browser/${file}.mjs`,'utf8')])));
+ const entries=collectWorkflowErrors(readFileSync('browser/workflow-error-codes.mjs','utf8'),Object.fromEntries(files.map(file=>[file,readFileSync(`browser/${file}.mjs`,'utf8')])),{'member-entry-date':readFileSync('browser/member-entry-date.mjs','utf8')});
  const cell=text=>text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('|','&#124;').replaceAll('\n',' ');
  return [
   '## Enrollment workflow errors','',

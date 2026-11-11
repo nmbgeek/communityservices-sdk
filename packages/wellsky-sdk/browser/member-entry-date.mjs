@@ -1,4 +1,8 @@
 import {apiScope} from './connection.mjs';
+import {entryExitTypes} from './entry-exit-types.mjs';
+export class MemberEntryDateInputError extends Error {
+ constructor(message,options){super(`Member entry date: ${message}`,options);this.name='MemberEntryDateInputError';this.code='MEMBER_ENTRY_DATE_INPUT_INVALID';if(options?.code)this.code=options.code;this.committed=false;this.fields=[...(options?.fields??[])];}
+}
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const positive=value=>Number.isSafeInteger(value)&&value>0;
 const fail=message=>{throw Error(`Member entry date: ${message}`);};
@@ -25,10 +29,19 @@ function exit(value){
  }
  return {...result,clientIds,enrollmentIds};
 }
+function normalizePlan(input){
+ if(!object(input)||!positive(input.providerId))throw new MemberEntryDateInputError('program required',{fields:['providerId']});
+ if(!entryExitTypes.includes(input.type))throw new MemberEntryDateInputError('unsupported Entry/Exit type',{code:'MEMBER_ENTRY_DATE_TYPE_UNSUPPORTED',fields:['type']});
+ try{
+  const entryDate=instant(input.entryDate),memberClientIds=ids(input.memberClientIds),cohortClientIds=ids(input.cohortClientIds);
+  if(cohortClientIds.length<2||memberClientIds.some(id=>!cohortClientIds.includes(id)))fail('complete planned cohort required');
+  return {providerId:input.providerId,type:input.type,entryDate,memberClientIds,cohortClientIds};
+ }catch(cause){throw new MemberEntryDateInputError('invalid date or planned cohort',{cause,fields:['entryDate','memberClientIds','cohortClientIds']});}
+}
 function normalize(input){
  const target=identity(input);
- if(!positive(input.providerId)||!['HUD','VA'].includes(input.type)||!Array.isArray(input.cohort)||input.cohort.length<2)fail('program and complete household cohort required');
- const entryDate=instant(input.entryDate),cohort=input.cohort.map(member=>({ ...identity(member),entryDate:instant(member.entryDate),exit:exit(member.exit)})).sort((a,b)=>a.clientId-b.clientId);
+ const plan=normalizePlan({providerId:input.providerId,type:input.type,entryDate:input.entryDate,memberClientIds:[target.clientId],cohortClientIds:Array.isArray(input.cohort)?input.cohort.map(m=>m?.clientId):[]});
+ const entryDate=plan.entryDate,cohort=input.cohort.map(member=>({ ...identity(member),entryDate:instant(member.entryDate),exit:exit(member.exit)})).sort((a,b)=>a.clientId-b.clientId);
  ids(cohort.map(m=>m.clientId));ids(cohort.map(m=>m.enrollmentId));
  for(const member of cohort)if(member.exit.clientId!==member.clientId||member.exit.enrollmentId!==member.enrollmentId)fail('exit identity mismatch');
  const member=cohort.find(m=>m.clientId===target.clientId&&m.enrollmentId===target.enrollmentId);
@@ -59,6 +72,7 @@ export function createMemberEntryDatePort({api,enrollmentSession}){
   return alreadyPresent;
  };
  return {
+  validateMemberEntryDatePlan(raw){normalizePlan(raw);},
   async validateMemberEntryDate(raw){await inspect(normalize(raw));},
   async saveMemberEntryDate(raw){
    const input=normalize(raw);if(await inspect(input))return;

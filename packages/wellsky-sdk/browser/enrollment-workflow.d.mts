@@ -1,3 +1,5 @@
+import type {EntryExitType} from './entry-exit-types.mjs';
+export type {EntryExitType} from './entry-exit-types.mjs';
 import type {DateOfBirth} from './date-of-birth.mjs';
 import type {PicklistCatalogSnapshot, Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
 import type {UiMutationStore,EnrollmentReader} from './index.mjs';
@@ -30,7 +32,6 @@ export interface EnrollmentAssessmentPlan {
   notApplicable?:Record<string,string>;
   carryForward?:string[];
 }
-export type EntryExitType = 'HUD'|'Basic'|'Standard'|'RHY'|'VA'|'Basic Center Program Entry/Exit'|'PATH'|'Quick Call'|'Transitional Living Program Entry/Exit';
 /** Exact location identifiers returned by getProviderAssessments, not assessment codes. */
 export interface EnrollmentAssessmentLocations {entry:string;interim:string;exit?:string;}
 export interface EnrollmentDiscoveryInput {

@@ -53,12 +53,9 @@ test('single-client interim signature writes once and a fresh helper reconciles 
  assert.equal((await restarted.createInterimUpdate({...args,reviewDate:'2026-10-21T16:00:00Z'})).outcome,'reconciled');
  assert.equal(f.state.reviews.length,1);assert.equal(f.counts.prepare,1);assert.equal(f.counts.send,1);
 });
-test('single-client interim signature cannot submit household, subset, member-add or wrong-type payloads',async()=>{
+test('single-review RPC rejects multiple selected members, member additions and invalid payloads',async()=>{
  const cases=[
   f=>{f.state.householdClientIds=[1,2];f.state.members.push({clientId:2,enrollmentId:11});return {...update,clientIds:[1,2]};},
-  f=>{f.state.householdClientIds=[1,2];f.state.members.push({clientId:2,enrollmentId:11});return {...update,clientIds:[1]};},
-  f=>{f.state.householdClientIds=[1,2];return {...update,clientIds:[1]};},
-  f=>{f.state.members.push({clientId:2,enrollmentId:11});return {...update,clientIds:[1]};},
  ];
  for(const configure of cases){const f=singleReviewFixture(),args=configure(f);await assert.rejects(f.helper.createInterimUpdate(args),e=>e.kind==='protocol');assert.equal(f.counts.send,0);}
  for(const change of [
@@ -172,4 +169,20 @@ for(const committed of [true,false])test(`reauthentication after an interrupted 
  if(committed)assert.equal((await helper.addHouseholdMembers(add)).outcome,'reconciled');
  else await assert.rejects(helper.addHouseholdMembers(add),e=>e.kind==='ambiguous_commit');
  assert.equal(f.counts.send,1);assert.equal(f.counts.prepare,1);
+});
+test('one-member household reviews accept the observed single-review RPC without including other members',async()=>{
+ for(const target of [1,2]){
+  const f=singleReviewFixture();f.state.householdClientIds=[1,2];f.state.members=[{clientId:1,enrollmentId:10},{clientId:2,enrollmentId:11}];f.state.clientId=target;f.state.enrollmentId=target===1?10:11;
+  const input={...update,clientId:target,enrollmentId:f.state.enrollmentId,clientIds:[target]};
+  assert.equal((await f.helper.createInterimUpdate(input)).outcome,'written');assert.deepEqual(f.state.reviews[0].clientIds,[target]);
+  assert.equal((await new GwtEnrollmentHelpers(f.options).createInterimUpdate(input)).outcome,'reconciled');assert.equal(f.counts.send,1);
+ }
+});
+test('interim verification refuses extra unselected participants rather than adopting a broader review',async()=>{
+ const f=fixture({enrolled:true});f.state.reviews=[{reviewId:20,type:'Update',reviewDate:update.reviewDate,clientIds:[1,2]}];
+ await assert.rejects(f.helper.createInterimUpdate({...update,clientIds:[1]}),e=>e.reason==='review-conflict');assert.equal(f.counts.send,0);
+});
+test('GWT preparation retains the original failure without journaling a send',async()=>{
+ const f=fixture({enrolled:true}),original=Object.assign(Error('Original preparation failure'),{status:401});f.session.prepare=async()=>{throw original;};
+ await assert.rejects(f.helper.createInterimUpdate(update),e=>e.cause===original&&e.status===401);assert.equal(f.counts.send,0);
 });

@@ -52,3 +52,12 @@ test('unclassified coded failures still reconcile authentication without replay'
  await assert.rejects(withPageLock(f.page,async()=>{calls++;f.expire();throw Object.assign(Error('HTTP error'),{code:'ECONNRESET'});}),e=>e instanceof SessionInterruptedError&&e.reauthenticated);
  assert.equal(f.count(),1);assert.equal(calls,1);
 });
+test('session interruption retains the original operation error and observed HTTP status',async()=>{
+ const f=fixture(),original=Object.assign(Error('Deterministic prepare failure'),{step:'review-capture'});
+ await assert.rejects(withPageLock(f.page,async()=>{f.page.emit('response',{url:()=>f.page.url().split('#')[0]+'?request',status:()=>401});throw original;}),e=>e instanceof SessionInterruptedError&&e.cause===original&&e.status===401&&e.reauthenticated);
+ assert.equal(f.count(),1);
+});
+test('original operation and reauthentication failures remain separately inspectable',async()=>{
+ const f=fixture(),original=Object.assign(Error('Original failure'),{status:500,step:'prepare'});f.fail();
+ await assert.rejects(withPageLock(f.page,async()=>{f.page.emit('response',{url:()=>f.page.url(),status:()=>401});throw original;}),e=>e instanceof SessionInterruptedError&&!e.reauthenticated&&e.cause===original&&e.status===500&&e.authenticationStatus===401&&e.step==='prepare'&&e.reauthenticationCause.message==='Authentication unavailable');
+});

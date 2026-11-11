@@ -552,3 +552,39 @@ test('existing native enrollment journals support reviews after household change
  await f.workflow().createHouseholdInterim(f.withHead(interimInput()));assert.equal(f.counts.review,1);
  const before=structuredClone(f.counts);await assert.rejects(f.workflow().addHouseholdMembers({key:'additional',enrollmentKey:'entry',headClientId:1,entryDate:'2026-10-24T16:00:00Z',members:[{clientId:3,assessment:assessment(3)}]}));assert.deepEqual(f.counts,before);
 });
+
+const uiEntryExitTypes=['Basic','Basic Center Program Entry/Exit','HUD','PATH','Quick Call','RHY','Standard','Transitional Living Program Entry/Exit','VA'];
+function typeWorkflow(f,type){return createEnrollmentWorkflow({...f,assessmentLocations:{[type]:{entry:'showHudEntry',interim:'showHudInterim',exit:'showHudExit'}}});}
+for(const type of uiEntryExitTypes)test(`all lifecycle stages and later member dates support ${type}`,async()=>{
+ const f=headFixture(),workflow=typeWorkflow(f,type);f.entry.type=type;
+ const headPlan=input=>({...input,members:input.members.map(m=>({...m,assessment:{...m.assessment,carryForward:[...(m.assessment.carryForward??[]),'HUD_RELATIONTOHOH']}}))});
+ await workflow.createHouseholdEnrollment(f.entry);
+ const firstExit=headPlan({...exitInput(),key:'first-exit',members:exitInput().members.filter(m=>m.clientId===2)});await workflow.exitHousehold(firstExit);const exited=structuredClone(f.exits.get(2));
+ const addition={key:'later',enrollmentKey:'entry',headClientId:1,entryDate:'2026-10-24T16:00:00Z',members:[{clientId:3,assessment:assessment(3)}]};
+ addition.members[0].assessment.answers.HUD_RELATIONTOHOH={option:{code:'RELATIONHOH_HEAD_CHILD'}};for(const row of addition.members[0].assessment.subassessments)row.answers.START.value=addition.entryDate;
+ await workflow.addHouseholdMembers(addition);assert.equal(f.additionCounts.date,1);assert.deepEqual(f.exits.get(2),exited);assert.equal(f.entries.find(e=>e.clientId===1).type,type);
+ const review=headPlan({...interimInput(),reviewDate:'2026-10-25T16:00:00Z',members:interimInput().members.filter(m=>m.clientId===1)});await workflow.createHouseholdInterim(review);assert.deepEqual(f.clients.get(1).reviews[0].clientIds,[1]);assert.equal(f.clients.get(3).reviews.length,0);
+ const after=structuredClone({counts:f.counts,dates:f.additionCounts,exits:f.exitCounts});await workflow.addHouseholdMembers(addition);await workflow.createHouseholdInterim(review);assert.deepEqual({counts:f.counts,dates:f.additionCounts,exits:f.exitCounts},after);
+ const end=headPlan({...exitInput(),key:'remaining-exit',exitDate:'2026-10-26T16:00:00Z',members:[1,3].map(clientId=>({clientId,assessment:{answers:{TOTAL:{value:0}},notApplicable:{OPTIONAL:'Synthetic not applicable'},carryForward:['ROWS']}}))});await workflow.exitHousehold(end);const completed=structuredClone({counts:f.counts,dates:f.additionCounts,exits:f.exitCounts});await workflow.exitHousehold(end);assert.deepEqual({counts:f.counts,dates:f.additionCounts,exits:f.exitCounts},completed);assert.deepEqual(f.exits.get(2),exited);
+});
+test('member date plan refusal and legacy custom ports fail before attachment or new journal state',async()=>{
+ for(const missing of [false,true]){
+  const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());const original=structuredClone([...f.journal]),before=structuredClone({counts:f.counts,dates:f.additionCounts});
+  if(missing)delete f.memberEntryDatePort.validateMemberEntryDatePlan;else f.memberEntryDatePort.validateMemberEntryDatePlan=()=>{throw Error('Custom input-only refusal');};
+  await assert.rejects(f.workflow().addHouseholdMembers(additionInput()),e=>e.code===(missing?'MEMBER_ENTRY_DATE_PORT_REQUIRED':'MEMBER_ENTRY_DATE_PREFLIGHT_FAILED')&&e.committed===false);
+  assert.deepEqual({counts:f.counts,dates:f.additionCounts},before);assert.deepEqual([...f.journal],original);
+ }
+});
+test('same-key Standard addition resumes a legacy after-attachment failure without duplicate attachment',async()=>{
+ const f=fixture(),type='Standard',workflow=typeWorkflow(f,type);await workflow.createHouseholdEnrollment({...entryInput(),type});await workflow.exitHousehold({...exitInput(),key:'exit-child',members:exitInput().members.filter(m=>m.clientId===2)});
+ const input=additionInput(),validate=f.memberEntryDatePort.validateMemberEntryDate;f.memberEntryDatePort.validateMemberEntryDate=async()=>{throw Error('Member entry date: program and complete household cohort required');};
+ await assert.rejects(workflow.addHouseholdMembers(input),e=>e.committed==='unknown');const attached=f.entries.find(e=>e.clientId===3);assert.ok(attached);const id=attached.enrollmentId,attachments=f.counts.attach;
+ assert.equal(f.additionCounts.date,0);f.memberEntryDatePort.validateMemberEntryDate=validate;
+ await workflow.addHouseholdMembers(input);assert.equal(f.entries.find(e=>e.clientId===3).enrollmentId,id);assert.equal(f.counts.attach,attachments);assert.equal(f.additionCounts.date,1);
+ const before=structuredClone({counts:f.counts,dates:f.additionCounts});assert.equal((await workflow.addHouseholdMembers(input)).outcome,'already-present');assert.deepEqual({counts:f.counts,dates:f.additionCounts},before);
+});
+for(const type of uiEntryExitTypes)test(`${type}: an attempted uncertain member-date write is never replayed`,async()=>{
+ const f=fixture({dateNoCommit:true}),workflow=typeWorkflow(f,type);await workflow.createHouseholdEnrollment({...entryInput(),type});
+ for(let i=0;i<2;i++)await assert.rejects(workflow.addHouseholdMembers(additionInput()),e=>e.committed==='unknown');
+ assert.equal(f.additionCounts.date,1);assert.equal(f.entries.filter(e=>e.clientId===3).length,1);
+});

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 - 2026-11-11
+
+- Share all nine UI Entry/Exit types between enrollment workflows and the member-entry-date port; remove the port's stale HUD/VA-only restriction.
+- Require read-only `validateMemberEntryDatePlan` before attachment, using known client IDs without inventing new enrollment IDs. Custom ports must implement the new preflight method. Add specific input/preflight error codes and preserve overall commit markers for prior attempts.
+- Accept the UI's single-review RPC for one selected household member, including a non-head or the only open member. Retain group-RPC compatibility and require exact review participant verification.
+- Preserve original operation/preparation errors, observed authentication HTTP status, available step, and separate reconnection failure on session interruption. Never replay an interrupted callback or uncertain mutation.
+- Document same-key recovery for already-attached members and pending reviews, with all-type synthetic coverage and live capture/validation that made no record writes.
+
 ## 0.9.1 - 2026-11-11
 
 - Keep the pinned Chromium download and full browser checks on GitHub Ubuntu 24.04 runners while using their preinstalled runtime libraries. Avoid the redundant APT/font installation that blocked 0.9.0 public publication when the Ubuntu mirror failed DNS resolution. SDK runtime behavior is unchanged from 0.9.0.

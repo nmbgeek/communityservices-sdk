@@ -22,7 +22,8 @@ export {createServiceRecorder} from './service-recording.mjs';
 export {getSsvfServiceRules} from './ssvf-rules.mjs';
 export {createProgramDiscovery} from './program-discovery.mjs';
 export {createEnrollmentWorkflow,EnrollmentWorkflowError,EnrollmentReadError} from './enrollment-workflow.mjs';
-export {createMemberEntryDatePort} from './member-entry-date.mjs';
+export {entryExitTypes} from './entry-exit-types.mjs';
+export {createMemberEntryDatePort,MemberEntryDateInputError} from './member-entry-date.mjs';
 export {createHouseholdExitUi} from './household-exit.mjs';
 
 export {SessionInterruptedError} from './session-authentication.mjs';
