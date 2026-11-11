@@ -816,3 +816,29 @@ test('explicit write-label override avoids catalog access; incomplete automatic 
   await assert.rejects(g.workflow({yesNoWrites:'standard',enrollmentSession:{readPicklistOptions:read}}).createEnrollment(g.input),e=>e.committed===false);assert.equal(g.counts.enrollment,0);assert.equal(g.mobileBodies.length+g.standardBodies.length,0);
  }
 });
+
+test('scalar collisions observed after enrollment stop before the scalar attempt and preserve the entry',async()=>{
+ for(const value of ['9','0']){
+  const f=fixture(),input=entryInput();delete input.assessment.notApplicable.OPTIONAL;input.assessment.answers.OPTIONAL={value:'New answer'};
+  const create=f.api.enrollments.createEntryAssessment;f.api.enrollments.createEntryAssessment=async request=>{const result=await create(request);f.history.push({field:'TOTAL',value,date:entryDate});return result;};
+  for(let i=0;i<2;i++)await assert.rejects(f.workflow().createEnrollment(input),e=>e.code==='MOBILE_ANSWER_EXISTS'&&e.committed==='unknown'&&e.step==='scalars'&&e.fields.includes('TOTAL'));
+  assert.equal(f.counts.enrollment,1);assert.equal(f.counts.scalars,0);assert.equal(f.counts.rows,0);
+  const status=await f.workflow().getStatus({clientId:1,key:input.key});assert.equal(status.stage,'pending');assert.equal(status.steps.some(s=>s.name==='scalars'),false);
+  f.history.push({field:'TOTAL',value:'0',date:entryDate},{field:'OPTIONAL',value:'New answer',date:entryDate});
+  assert.equal((await f.workflow().createEnrollment(input)).outcome,'verified');assert.equal(f.counts.enrollment,1);assert.equal(f.counts.scalars,0);
+ }
+});
+test('a partially committed scalar batch stays uncertain and is never retried or split',async()=>{
+ const f=fixture(),input=entryInput();delete input.assessment.notApplicable.OPTIONAL;input.assessment.answers.OPTIONAL={value:'New answer'};let attempts=0;
+ f.api.assessmentsMobile.addAnswer=async()=>{attempts++;f.history.push({field:'TOTAL',value:'0',date:entryDate});throw Object.assign(Error('Synthetic partial commit'),{status:400});};
+ for(let i=0;i<2;i++)await assert.rejects(f.workflow().createEnrollment(input),e=>e.reason==='uncertain write requires reconciliation'&&e.committed==='unknown'&&e.step==='scalars');
+ assert.equal(attempts,1);assert.equal(f.counts.rows,0);assert.equal((await f.workflow().getStatus({clientId:1,key:input.key})).steps.find(s=>s.name==='scalars').state,'attempted');
+});
+test('unavailable scalar evidence after enrollment blocks the first batch without marking it attempted',async()=>{
+ for(const fault of ['newer','type']){
+  const f=fixture(),get=f.api.assessments.get;
+  f.api.assessments.get=async input=>{const rows=await get(input);if(f.counts.enrollment){const q=rows.find(q=>q.virt_field_name==='TOTAL');if(fault==='newer'){q.answer_value='9';q.date_effective=reviewDate;}else q.question_type='lookup';}return rows;};
+  await assert.rejects(f.workflow().createEnrollment(entryInput()),e=>e.code==='MOBILE_PREFLIGHT_UNAVAILABLE'&&e.committed==='unknown'&&e.step==='scalars');
+  assert.equal(f.counts.enrollment,1);assert.equal(f.counts.scalars,0);assert.equal((await f.workflow().getStatus({clientId:1,key:'entry-1'})).steps.some(s=>s.name==='scalars'),false);
+ }
+});

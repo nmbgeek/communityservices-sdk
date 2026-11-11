@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 - 2026-11-11
+
+- Recheck mobile scalar collisions immediately before the first scalar-stage attempt, including answers that appeared after enrollment or review creation. Refuse known collisions and unavailable evidence without sending the batch or marking that stage attempted; preserve earlier lifecycle writes and prior-attempt reconciliation.
+- Give complete-cohort adoption, standalone adoption of grouped entries, and changed verified steps specific stable codes instead of `WORKFLOW_FAILED`.
+- Generate the complete enrollment workflow error-code reference in `API.md`; fail generation for new constant refusal reasons without codes, including conditional branches.
+- Clarify that household discovery verifies current membership, not the original historical association, and explicit IDs do not bypass active-membership validation.
+- Record the additional reported adoption/interim/correction acceptance from GitLab issues #5–#7, and distinguish the issue #2 report from the successful follow-up batch controls. The upstream partial-commit cause remains unresolved; no score-specific batch splitting is introduced.
+
 ## 0.8.0 - 2026-11-11
 
 - Resolve full lookup write labels without existing answers using `enrollmentSession.readPicklistOptions` and `createCatalogWriteLabelResolver`.

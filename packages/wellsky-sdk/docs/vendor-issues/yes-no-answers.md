@@ -36,8 +36,16 @@ After a successful standard write, the generic assessment read with `dateEffecti
 
 ## A failed mobile batch saved one of its answers
 
-Observed by an integrator on November 2, 2026, with synthetic records. A 15-answer `AddAssessmentAnswer` batch (1 `date`, 13 `lookup`, 1 `int`) was sent a few seconds after the client's household enrollment and entry-assessment answers were created. It returned HTTP 400; the error body was not captured. Afterwards the `int` answer was stored at the correct effective date and the other 14 were empty. The client's rows for this assessment were not read just before the send, so the absence of prior rows is inferred from the integration's own writes. Resends failed as in [the existing-row case](#mobile-writes-fail-for-an-existing-row).
+GitLab issue #2 reports a November 2, 2026 synthetic-client test: a combined 15-answer batch (1 `date`, 13 `lookup`, 1 `int`) returned HTTP 400 with `An error occurred while saving the entity changes. See the inner exception for details.` Only the integer score answer was stored afterwards. The issue says no row existed beforehand, that the error body was captured, and that the non-score batch and score-only batch each succeeded separately.
 
-On November 3, the byte-identical batch returned 200 and read back completely on fresh synthetic clients without an enrollment, an enrolled single adult, and an enrolled household head. Splitting the batch, reordering it, or omitting the `int` answer made no difference. The failure has not been reproduced.
+Separate retained run notes describe a batch sent shortly after household enrollment and entry answers, without a retained before-write assessment snapshot or raw error body. These accounts differ in their stated evidence. The SDK team cannot establish that they describe identical attempts or independently confirm their pre-write state. An existing answer shared by two instruments is one possible collision source, not an established explanation of the reported failure.
 
-**Ask WellSky:** Can a mobile write that returns HTTP 400 commit part of its batch? Is a write to an assessment assigned to the provider affected by work the server does after enrollment creation?
+On November 3, the byte-identical batch returned 200 and read back completely on fresh synthetic clients without an enrollment, an enrolled single adult, and an enrolled household head. Splitting the batch, reordering it, or omitting the `int` answer made no difference in those successful controls. The original failure remains unreproduced in that follow-up. These controls do not disprove the original report or establish a score-specific serialization rule.
+
+## SDK guard for an observed collision after preflight
+
+A November 11 synthetic regression demonstrated a narrower SDK defect: enrollment creation populated a scalar after the initial preflight; the scalar-stage read observed that occupied instant, but the workflow still submitted the full mobile batch. SDK 0.8.1 now refuses that first scalar attempt before marking it attempted. This protects against an observed collision and unavailable evidence after an earlier lifecycle stage. It does not establish the cause of issue #2 or make mobile batches atomic.
+
+A separate synthetic partial-commit control returned HTTP 400 after saving only one answer. Its stage stayed pending, same-key retries sent nothing, and later row stages did not run. Preserve that uncertain-write behavior. Do not split, replay, change the effective date, or replace the key to work around an already-attempted batch.
+
+**Ask WellSky:** Can a mobile write that returns HTTP 400 commit part of its batch? Is a write to an assessment assigned to the provider affected by work the server does after enrollment creation? Which server-side diagnostic can identify the failing question and database constraint?

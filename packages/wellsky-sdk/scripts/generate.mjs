@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import {workflowErrorReference} from './workflow-error-reference.mjs';
 
 // Names are deliberately stable even if Swagger changes tags or gains operationIds.
 const names = {
@@ -243,7 +244,7 @@ export function createWellSkyClient(options: ClientOptions): WellSkyClient { ret
   emitted.set(`src/generated/${version}.ts`, output);
   console.log(`${version}: ${count} operations, ${Object.keys(spec.components.schemas).length} schemas, ${groups.size} groups`);
 }
-emitted.set('API.md', docs.join('\n') + '\n');
+emitted.set('API.md', docs.join('\n') + '\n\n' + workflowErrorReference());
 for (const [path, content] of emitted) {
   if (process.argv.includes('--check')) {
     if (readFileSync(path, 'utf8') !== content) throw new Error(`Generated file is stale: ${path}`);
