@@ -50,7 +50,7 @@ function fixture(faults={}){
   evaluate:async(fn,request)=>{
    if(typeof request==='string')return fn(request);
    let rows=[];const body=request.body;
-   if(body.includes('e.typeEntryExit.name AS enrollmentType'))rows=[{enrollmentId:targetEnrollment,clientId:targetClient,projectStartDate:'2026-10-19T16:00:00Z',groupId:50,providerId:2,enrollmentType:'HUD'}];
+   if(body.includes('e.typeEntryExit.name AS enrollmentType'))rows=[{enrollmentId:targetEnrollment,clientId:targetClient,projectStartDate:'2026-10-19T16:00:00Z',groupId:50,householdId:30,providerId:2,enrollmentType:'HUD'}];
    else if(body.includes('e.exitDate AS projectExitDate'))rows=exits;
    else if(body.includes('FROM SpEntryExit AS e')&&body.includes('e.groupId ='))rows=members;
    else if(body.includes('FROM SpEntryExitReview AS r')&&faults.laterReview)rows=[{reviewId:61,subgroupId:null,reviewDate:'2026-10-24T16:00:00Z',type:'Update'}];

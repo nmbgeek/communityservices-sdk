@@ -46,7 +46,7 @@ function fixture({dialogCount=1,unexpectedRpc=false,anchorClientId=1}={}){
   waitForResponse:async()=>({status:()=>200,text:async()=>'//OK[]',request:()=>entryRequest}),
   evaluate:async(_,r)=>{
    let rows=[];
-   if(r.body.includes('e.typeEntryExit.name AS enrollmentType'))rows=[{clientId:anchorClientId,enrollmentId:anchorEnrollmentId,projectStartDate:anchorClientId===1?'2026-10-19T16:00:00Z':'2026-10-21T16:00:00Z',groupId:50,providerId:2,enrollmentType:'HUD'}];
+   if(r.body.includes('e.typeEntryExit.name AS enrollmentType'))rows=[{clientId:anchorClientId,enrollmentId:anchorEnrollmentId,projectStartDate:anchorClientId===1?'2026-10-19T16:00:00Z':'2026-10-21T16:00:00Z',groupId:50,householdId:30,providerId:2,enrollmentType:'HUD'}];
    else if(r.body.includes('e.exitDate AS projectExitDate'))rows=[1,2].map(clientId=>({clientId,enrollmentId:clientId===1?50:52,projectExitDate:null,destination:null,destinationCode:null,reasonForLeaving:null,reasonForLeavingCode:null,exitSubgroupId:null}));
    else if(r.body.includes('FROM SpEntryExit AS e')&&r.body.includes('e.groupId ='))rows=[{clientId:1,enrollmentId:50},{clientId:2,enrollmentId:52}];
    return {status:200,body:mappedWire(rows)};

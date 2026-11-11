@@ -3,24 +3,33 @@ import {parseRestInstant,toItems} from '../dist/esm/index.js';
 const positive=v=>Number.isSafeInteger(v)&&v>0;
 const pairs=members=>JSON.stringify(members.map(({clientId,enrollmentId})=>({clientId,enrollmentId})).sort((a,b)=>a.clientId-b.clientId));
 
-/** Resolves only a unique current household satisfying the adoption membership contract. */
+/** Read the native household association; older custom readers retain explicitly labeled membership matching. */
 export function createHouseholdEnrollmentDiscovery({api,enrollmentSession,makeError}){
  const fail=(code,reason)=>{throw makeError(reason,{code,committed:false});};
  return async input=>{
   if(!input||Object.keys(input).some(k=>!['headClientId','headEnrollmentId'].includes(k))||!positive(input.headClientId)||!positive(input.headEnrollmentId))fail('HOUSEHOLD_DISCOVERY_INPUT_INVALID','head client and enrollment IDs required');
-  if(typeof enrollmentSession?.readEnrollment!=='function'||typeof api.households?.listForClient!=='function'||typeof api.households?.get!=='function')fail('HOUSEHOLD_DISCOVERY_READERS_REQUIRED','GWT detail and complete household readers required');
+  if(typeof enrollmentSession?.readEnrollment!=='function')fail('HOUSEHOLD_DISCOVERY_READERS_REQUIRED','authoritative enrollment reader required');
   const target={clientId:input.headClientId,enrollmentId:input.headEnrollmentId};
   const anchor=await enrollmentSession.readEnrollment(target);
   const valid=(s,t)=>s?.source==='gwt-rpc'&&s.tenant===api.tenant&&s.clientId===t.clientId&&s.enrollmentId===t.enrollmentId&&positive(s.providerId)&&typeof s.enrollmentType==='string'&&Number.isFinite(parseRestInstant(s.projectStartDate));
   if(!valid(anchor,target)||!Array.isArray(anchor.members)||!anchor.members.length||anchor.members.some(m=>!positive(m?.clientId)||!positive(m?.enrollmentId))||new Set(anchor.members.map(m=>m.clientId)).size!==anchor.members.length||new Set(anchor.members.map(m=>m.enrollmentId)).size!==anchor.members.length||!anchor.members.some(m=>m.clientId===target.clientId&&m.enrollmentId===target.enrollmentId))fail('HOUSEHOLD_DISCOVERY_DETAIL_INVALID','complete linked enrollment cohort required');
   if(anchor.members.length===1&&anchor.grouped!==true)fail('ENROLLMENT_NOT_GROUPED','standalone enrollment uses adoptEnrollment');
   if(anchor.grouped===false&&anchor.members.length>1)fail('HOUSEHOLD_DISCOVERY_DETAIL_INVALID','group flag conflicts with linked cohort');
+  const native=anchor.householdId!==undefined,validGroup=v=>Number.isSafeInteger(v)&&v>0||typeof v==='string'&&/^[a-zA-Z0-9_-]+$/.test(v);
+  if(native&&(!positive(anchor.householdId)||!validGroup(anchor.groupId)))fail('HOUSEHOLD_DISCOVERY_NATIVE_LINK_REQUIRED','native household and enrollment group IDs required');
   const members=anchor.members.map(({clientId,enrollmentId})=>({clientId,enrollmentId})).sort((a,b)=>a.clientId-b.clientId),starts=new Map();
   for(const member of members){
    const s=member.clientId===target.clientId?anchor:await enrollmentSession.readEnrollment(member);
    if(!valid(s,member)||s.providerId!==anchor.providerId||s.enrollmentType!==anchor.enrollmentType||!Array.isArray(s.members)||pairs(s.members)!==pairs(members))fail('HOUSEHOLD_DISCOVERY_COHORT_CHANGED','linked enrollment cohort changed during discovery');
+   if(native&&(s.householdId!==anchor.householdId||s.groupId!==anchor.groupId||s.grouped===false))fail('HOUSEHOLD_DISCOVERY_COHORT_CHANGED','native household or enrollment group changed during discovery');
    starts.set(member.clientId,parseRestInstant(s.projectStartDate));
   }
+  if(native){
+   const fresh=await enrollmentSession.readEnrollment(target);
+   if(!valid(fresh,target)||fresh.householdId!==anchor.householdId||fresh.groupId!==anchor.groupId||fresh.providerId!==anchor.providerId||fresh.enrollmentType!==anchor.enrollmentType||!Array.isArray(fresh.members)||pairs(fresh.members)!==pairs(members))fail('HOUSEHOLD_DISCOVERY_COHORT_CHANGED','native household or enrollment cohort changed during discovery');
+   return {...input,householdId:anchor.householdId,householdSource:'native-enrollment',groupId:anchor.groupId,providerId:anchor.providerId,type:anchor.enrollmentType,members};
+  }
+  if(typeof api.households?.listForClient!=='function'||typeof api.households?.get!=='function')fail('HOUSEHOLD_DISCOVERY_READERS_REQUIRED','legacy readers require complete household readers');
   const candidates=[],seen=new Set();let total;
   for(let startPage=1;startPage<=100;startPage++){
    const result=await api.households.listForClient({path:{clientId:input.headClientId},query:{perPage:100,startPage,total_count:true}});

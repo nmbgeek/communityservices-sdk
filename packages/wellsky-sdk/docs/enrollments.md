@@ -232,7 +232,7 @@ const detail = await session.enrollmentSession.readEnrollment({
 // detail.members contains the complete linked clientId/enrollmentId pairs.
 ```
 
-Use the session returned by `openEnrollmentSession`. Lists include open and exited entries, validate complete counts, and refuse more than 1,000 records. List rows and details include `groupId` and `grouped`. The flag describes a stored group link, including a group with one participant; it is not a member count and requires no per-row detail reads. These fields are required on managed catalog rows and optional on custom detail-reader contracts for compatibility. `groupId` is never a household ID. For a verified household match from a head enrollment, use `discoverHouseholdEnrollment` below.
+Use the session returned by `openEnrollmentSession`. Lists include open and exited entries, validate complete counts, and refuse more than 1,000 records. List rows and details include `groupId` and `grouped`. The flag describes a stored group link, including a group with one participant; it is not a member count and requires no per-row detail reads. These fields are required on managed catalog rows and optional on custom detail-reader contracts for compatibility. `groupId` is never a household ID. Managed lists and details also return `householdId`, read directly from the enrollment record; `null` means no recorded association. It is optional on custom reader contracts for compatibility. Use `discoverHouseholdEnrollment` below to verify that association across the complete cohort.
 
 The same session also exposes `readPicklistOptions({clientId, optionIds})` for exact labels before answers exist. It uses fresh read context, validates counted results, and makes no record writes. Enrollment workflows use it automatically unless `writeLabel` is supplied. See [catalog lookup labels](assessments.md#resolve-lookup-labels-before-an-answer-exists).
 
@@ -262,7 +262,7 @@ For a person in a linked household enrollment, use `exitHousehold` with that per
 
 ## Adopt an enrollment entered manually in WellSky
 
-Use `adoptEnrollment({key, clientId, enrollmentId})` for a standalone enrollment. For linked household enrollments, use `adoptHouseholdEnrollment({key, householdId, headClientId, members})`, where each member supplies both `clientId` and `enrollmentId`. Supply the complete linked cohort, including members already exited, and the original enrollment head. Adoption verifies authoritative GWT identities, program/type, entry dates, current household membership, head relationships when present, and head coverage across all enrollment intervals.
+Use `adoptEnrollment({key, clientId, enrollmentId})` for a standalone enrollment. For linked household enrollments, use `adoptHouseholdEnrollment({key, householdId, headClientId, members})`, where each member supplies both `clientId` and `enrollmentId`. Supply the complete linked cohort, including members already exited, and the original enrollment head. Adoption verifies authoritative GWT identities, program/type, entry dates, the native household/group association when available, original head relationships, and head coverage across all enrollment intervals. An explicit household ID must match the native enrollment field. Legacy custom readers without that field retain their current-household validation.
 
 Adoption writes only to the local durable journal. It does not create, attach, exit or modify an HMIS record. Later entrants retain their own original entry dates. An enrollment already tracked under another entry key is rejected; use its existing key. Retry an interrupted adoption with the same inputs and store.
 
@@ -274,13 +274,20 @@ After standalone adoption, its key can be used as `enrollmentKey` for `createInt
 const discovered = await workflow.discoverHouseholdEnrollment({
   headClientId, headEnrollmentId,
 });
-// discovered: householdId, householdSource, providerId, type, members
+// Built-in reader: householdId, groupId, householdSource: "native-enrollment", providerId, type, members
 const adopted = await workflow.adoptHouseholdEnrollment({
   key: sourceEnrollmentKey, headClientId, headEnrollmentId,
 });
 ```
 
-Discovery reads the linked enrollment cohort through GWT and matches it against complete current household membership reads. It requires one household containing the cohort, the same head, and membership dates covering each entry. It verifies that household again before returning `householdSource: 'verified-membership'`. This is a verified membership match, not a native historical household pointer on the enrollment. Zero matches, multiple matches, incomplete reads or changed relationships fail without adopting. A unique current match does not prove the enrollment's original historical household association. If that original association is required, verify it independently; the SDK does not expose a native historical pointer. Explicit adoption inputs still require active household membership, the matching head and valid dates. Known historical IDs cannot bypass those guards, so inactive or changed historical households remain unsupported. No record is written to WellSky during discovery or adoption.
+WellSky stores both `SpEntryExit.groupId` and `SpEntryExit.householdId`. With a built-in reader, discovery reads the household ID directly from the enrollment, verifies that every linked participant has the same household and group IDs, and rechecks the anchor before returning `householdSource: 'native-enrollment'`. It does not search current households to infer the association. Missing native IDs, mixed associations, incomplete cohorts or changed identities stop discovery. A present-but-null native household field never falls back to a membership guess.
+
+Native adoption also verifies the original head using entry-time `HUD_RELATIONTOHOH` answers and checks that the head's enrollment covers every member's interval. New native adoptions without that head evidence are refused. Existing verified journal keys retain their accepted head identity and intent hashes. Adoption only records identities locally; it makes no WellSky record writes.
+
+Interims and exits for native-linked groups validate the recorded household/group IDs and enrolled participants without requiring them to remain in an active current household. Group identities are pinned in the journal; drift blocks later operations. This allows recorded groups to remain usable after current household membership changes. Enrollment-head replacement remains unsupported, and the original head must still cover the members' enrollment dates. Creation and later member additions continue to require valid current household membership.
+
+Legacy custom detail readers that omit `householdId` retain the older unique-current-membership discovery, explicitly labeled `householdSource: 'verified-membership'`. That fallback does not prove a historical association. Upgrade those adapters to return the native `householdId` and `groupId` to use the new path. Existing keys whose original IDs agree remain valid; a conflicting historical guess is refused rather than silently rebound. See [native household evidence](vendor-issues/enrollment-household-identity.md).
+
 
 ### Register existing entry rows
 

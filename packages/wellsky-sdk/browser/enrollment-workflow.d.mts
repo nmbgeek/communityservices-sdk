@@ -110,10 +110,9 @@ export interface AdoptHouseholdEnrollmentInput {
  members:Array<{clientId:number;enrollmentId:number}>;
 }
 export interface HouseholdEnrollmentDiscoveryInput {headClientId:number;headEnrollmentId:number;}
-export interface HouseholdEnrollmentDiscoveryResult extends HouseholdEnrollmentDiscoveryInput {
- householdId:number;householdSource:'verified-membership';providerId:number;type:string;
- members:Array<{clientId:number;enrollmentId:number}>;
-}
+export type HouseholdEnrollmentDiscoveryResult = HouseholdEnrollmentDiscoveryInput & {
+ householdId:number;providerId:number;type:string;members:Array<{clientId:number;enrollmentId:number}>;
+} & ({householdSource:'native-enrollment';groupId:number|string}|{householdSource:'verified-membership';groupId?:never});
 export interface AdoptHouseholdEnrollmentFromHeadInput extends HouseholdEnrollmentDiscoveryInput {key:string;}
 export interface RegisterEntryRowsInput {
  key:string;enrollmentKey:string;clientId:number;
@@ -220,6 +219,8 @@ export interface HouseholdExitInput extends HouseholdExitDetailInput {
   members:HouseholdMemberPlan[];
 }
 export interface HouseholdEnrollmentResult {
+  groupId?:number|string;
+  householdSource?:'native-enrollment';
   key:string;
   outcome:'verified'|'already-present';
   householdId:number;
@@ -229,6 +230,8 @@ export interface HouseholdEnrollmentResult {
 export interface HouseholdInterimResult extends Omit<HouseholdEnrollmentResult,'members'> {members:InterimWorkflowResult[];}
 export interface HouseholdExitResult extends Omit<HouseholdEnrollmentResult,'members'> {members:ExitWorkflowResult[];}
 export interface HouseholdWorkflowStatus {
+  groupId?:number|string;
+  householdSource?:'native-enrollment';
   key:string;
   kind:'entry'|'addition'|'interim'|'exit';
   stage:'pending'|'verified';
@@ -246,7 +249,7 @@ export interface EnrollmentWorkflowOptions {
   store:UiMutationStore;
   /** Required for SVPPROFDOB answers or carry-forward. Share this workflow's durable store. */
   birthDates?:DateOfBirth;
-  /** Required for exits; also required with api.households and helpers.addHouseholdMembers for household operations. */
+  /** Required for exits and household operations. Household creation/additions also need api.households and helpers.addHouseholdMembers; native-linked adoption/reviews/exits do not. */
   enrollmentSession?:EnrollmentReader;
   /** Required for exitEnrollment and exitHousehold; the workflow owns its durable write journal. */
   exitUi?:HouseholdExitUi;
