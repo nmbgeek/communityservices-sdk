@@ -42,7 +42,9 @@ jobs:
       - run: npm ci
       - if: matrix.browser
         run: |
-          npx playwright-core install --with-deps chromium
+          # Ubuntu 24.04 runners already provide Chromium runtime libraries.
+          # Download the pinned browser; package:check must still launch and test it.
+          npx playwright-core install chromium
           echo "WELLSKY_TEST_CHROME=$(node --input-type=module -e 'import {chromium} from "playwright-core"; process.stdout.write(chromium.executablePath())')" >> "$GITHUB_ENV"
       - run: npm run package:check
       - if: matrix.browser
