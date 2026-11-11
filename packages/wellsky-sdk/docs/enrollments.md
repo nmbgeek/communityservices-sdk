@@ -130,7 +130,7 @@ Every mandatory label is resolved before the first write. The `yesno` stage veri
 
 ## Correct an existing entry assessment
 
-`correctEntry` patches an entry at its original effective timestamp. Supply the verified `createEnrollment` key as `enrollmentKey` and a new stable `key` for each correction. Configure `enrollmentSession` and a `writeLabel` resolver for tenant-verified lookup labels. A correction requires an open enrollment with no interim reviews or exit workflows.
+`correctEntry` patches an entry at its original effective timestamp. Supply the verified `createEnrollment` key as `enrollmentKey` and a new stable `key` for each correction. Configure `enrollmentSession`; built-in sessions discover exact lookup labels automatically. An explicit `writeLabel` callback overrides that discovery. A correction requires an open enrollment with no interim reviews or exit workflows.
 
 ```ts
 const corrected = await workflow.correctEntry({
@@ -233,6 +233,8 @@ const detail = await session.enrollmentSession.readEnrollment({
 ```
 
 Use the session returned by `openEnrollmentSession`. Lists include open and exited entries, validate complete counts, and refuse more than 1,000 records. List rows and details include `groupId` and `grouped`. The flag describes a stored group link, including a group with one participant; it is not a member count and requires no per-row detail reads. These fields are required on managed catalog rows and optional on custom detail-reader contracts for compatibility. `groupId` is never a household ID. For a verified household match from a head enrollment, use `discoverHouseholdEnrollment` below.
+
+The same session also exposes `readPicklistOptions({clientId, optionIds})` for exact labels before answers exist. It uses fresh read context, validates counted results, and makes no record writes. Enrollment workflows use it automatically unless `writeLabel` is supplied. See [catalog lookup labels](assessments.md#resolve-lookup-labels-before-an-answer-exists).
 
 ## Individual enrollment exits
 

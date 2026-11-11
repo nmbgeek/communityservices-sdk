@@ -784,3 +784,35 @@ test('rows dated after the server clock verify through a read at the assessment 
  const result=await f.workflow().createEnrollment(input);
  assert.equal(result.outcome,'verified');assert.equal(f.counts.rows,1);
 });
+
+function installCatalog(f){
+ const catalogReads=[];const walk=qs=>qs.flatMap(q=>[q,...walk(q.children)]);
+ const get=f.api.assessments.getDefinition;
+ f.api.assessments.getDefinition=async input=>{const d=await get(input);for(const q of walk(d.questions))for(const o of q.options)o.name=o.name.replace(' (HUD)',' ');return d;};
+ const readPicklistOptions=async input=>{catalogReads.push(input);const values=[...new Map(walk(f.metadata).flatMap(q=>q.options).map(o=>[o.id,{optionId:o.id,picklistId:o.picklistId,code:o.code,name:o.name}])).values()].filter(o=>input.optionIds.includes(o.optionId));return {source:'gwt-rpc',tenant:f.api.tenant,clientId:input.clientId,count:values.length,values};};
+ return {catalogReads,readPicklistOptions};
+}
+test('automatic catalog labels support fresh standard entry, mandatory carry and no-write retries',async()=>{
+ for(const carry of [false,true]){
+  const f=standardFixture();f.metadata.find(q=>q.fieldName==='RELATION').options[0].name='SELF (HUD)';
+  if(carry){delete f.input.assessment.answers.RELATION;f.input.assessment.carryForward=['RELATION'];f.history.push({field:'RELATION',value:'31',date:'2026-10-01T16:00:00Z'});}
+  const c=installCatalog(f),workflow=f.workflow({yesNoWrites:'standard',enrollmentSession:{readPicklistOptions:c.readPicklistOptions}});
+  await workflow.createEnrollment(f.input);assert.equal(f.standardBodies[0].find(q=>q.virt_field_name==='RELATION').answer_value,'SELF (HUD)');assert.equal(c.catalogReads.length,1);
+  const before=structuredClone(f.counts);assert.equal((await workflow.createEnrollment(f.input)).outcome,'already-present');assert.deepEqual(f.counts,before);
+ }
+});
+test('corrections resolve mandatory and changed lookups from catalog without a supplied callback',async()=>{
+ const f=exitFixture(),input=entryInput();f.metadata.push(question(90,'HUD_QUESTION','lookup',{mandatory:true,options:[{...option(91,'YES'),name:'Yes (HUD)'},{...option(92,'NO'),name:'No (HUD)'}]}));input.assessment.answers.HUD_QUESTION={option:{code:'YES'}};
+ const c=installCatalog(f);f.enrollmentSession.readPicklistOptions=c.readPicklistOptions;await f.workflow().createEnrollment(input);
+ const bodies=[],create=f.api.assessments.create;f.api.assessments.create=args=>{bodies.push(args.body);return create(args);};
+ await f.workflow().correctEntry({key:'carry-correction',enrollmentKey:input.key,clientId:1,answers:{TOTAL:{value:12}}});assert.equal(bodies[0].find(q=>q.virt_field_name==='HUD_QUESTION').answer_value,'Yes (HUD)');
+ const correction={key:'change-correction',enrollmentKey:input.key,clientId:1,answers:{HUD_QUESTION:{option:{code:'NO'}}}};await f.workflow().correctEntry(correction);assert.equal(bodies[1].find(q=>q.virt_field_name==='HUD_QUESTION').answer_value,'No (HUD)');assert.equal((await f.workflow().correctEntry(correction)).outcome,'already-present');assert.equal(bodies.length,2);
+});
+test('explicit write-label override avoids catalog access; incomplete automatic catalog blocks all writes',async()=>{
+ const f=standardFixture(),enrollmentSession={readPicklistOptions:async()=>{throw Error('Catalog unavailable');}};
+ await f.workflow({yesNoWrites:'standard',enrollmentSession,writeLabel:(_q,o)=>o.name}).createEnrollment(f.input);
+ for(const mode of ['unavailable','missing','wrong-client','wrong-tenant']){
+  const g=standardFixture(),c=installCatalog(g),read=async input=>{if(mode==='unavailable')throw Error('Catalog unavailable');const v=await c.readPicklistOptions(input);if(mode==='missing'){v.values.pop();v.count--;}if(mode==='wrong-client')v.clientId=2;if(mode==='wrong-tenant')v.tenant='other';return v;};
+  await assert.rejects(g.workflow({yesNoWrites:'standard',enrollmentSession:{readPicklistOptions:read}}).createEnrollment(g.input),e=>e.committed===false);assert.equal(g.counts.enrollment,0);assert.equal(g.mobileBodies.length+g.standardBodies.length,0);
+ }
+});

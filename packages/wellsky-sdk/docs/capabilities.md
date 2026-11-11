@@ -98,4 +98,10 @@ The integrator reports these training-tenant results on November 10 and 11, 2026
 
 The integrator has not tested household adoption followed by `createHouseholdInterim`, scalar correction on an adopted enrollment, or a new correction key after resolution. Synthetic tests do not replace that acceptance.
 
-The 0.7.0 label resolver, group flags, household discovery, row registration, error codes and mobile collision preflight have local regression coverage, not new live tenant acceptance. Full write labels remain unresolved for unobserved options. Household discovery refuses ambiguous current-membership matches. Yes/no blanking remains unsupported; no alternative route has been verified.
+The 0.7.0 label resolver, group flags, household discovery, row registration, error codes and mobile collision preflight have local regression coverage, not new live tenant acceptance. In 0.7.0, full write labels remained unresolved for unobserved options; the 0.8.0 catalog reader below removes that limitation when UI catalog access is available. Household discovery refuses ambiguous current-membership matches. Yes/no blanking remains unsupported; no alternative route has been verified.
+
+## Catalog label verification, November 11, 2026
+
+Read-only training checks matched all 1,288 distinct option IDs in the Coordinated Entry instrument to current GWT catalog rows across three synthetic clients (4,089 question/option pairs). Catalog names differed from REST metadata names for 139 option occurrences in one definition. The five enhanced yes/no HUD questions shared a catalog; plain yes/no alternatives had separate option IDs. The visible profile DOB-quality dropdown matched the catalog's full labels. This establishes metadata identity and displayed labels without prior-answer evidence, not fresh acceptance of every standard write. Existing enrollment and answer records were left unchanged.
+
+SDK 0.8.0 uses the catalog automatically for workflows with a built-in enrollment session. REST-only applications can supply a catalog resolver or retain their explicit callback. See [catalog evidence and limitations](vendor-issues/lookup-write-labels.md).

@@ -92,3 +92,4 @@ void plans.createClientNote({key:'note-source',clientId:1,values:{note_date:'202
 void plans.updateGoal({key:'goal-update',clientId:1,recordId:3,values:{goalDescription:'Updated'}});
 void plans.createActionStep({key:'action-source',clientId:1,goalId:3,values:{providerId:2,dateSet:'2026-10-20T16:00:00Z',actionStep:'Synthetic step',status:'In Progress'}});
 void session.workflows.createCaseNote({key:'case-note-source',clientId:1,goalId:3,providerId:2,noteDate:'2026-10-24',note:'Synthetic'});
+void session.enrollmentSession.readPicklistOptions({clientId:1,optionIds:[1,2]});
