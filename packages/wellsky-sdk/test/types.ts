@@ -1,6 +1,7 @@
 import { WellSkyClient, toItems, type ClientViewModelV2 } from "../dist/esm/index.js";
 import { WellSkyClient as V2Client, type ClientAddViewModel } from "../dist/esm/v2.js";
 import type { ApiResponse, CountedCollection } from "../dist/esm/index.js";
+import {writeMobileAnswersChecked,createReadBackWriteLabelResolver,type AssessmentDefinition} from '../dist/esm/index.js';
 
 const counted: CountedCollection<ClientViewModelV2> = { count: 1, values: [{ clientId: 123 }] };
 const responseWithCount: ApiResponse<ClientViewModelV2> = counted;
@@ -9,6 +10,10 @@ void countedItems;
 
 const client = new WellSkyClient({ tenant: "example_training", auth: { kind: "token", token: "example" } });
 const v2 = new V2Client({ tenant: "example_training", auth: { kind: "none" } });
+const checked={path:{clientId:1,assessmentCode:'FORM'},query:{dateEffective:'2026-11-09T16:00:00Z'},body:[{question_id:1,question_type:'int',virt_field_name:'SCORE',answer_value:'12'}]};
+void writeMobileAnswersChecked(client,checked);void writeMobileAnswersChecked(v2,checked);
+declare const labelDefinition:AssessmentDefinition;
+void createReadBackWriteLabelResolver(labelDefinition,[{tenant:'example_training',response:[]}]);
 const oldPayload: ClientAddViewModel = { firstName: "Example", lastName: "Person" };
 void v2.clients.create({ body: oldPayload });
 void v2.clients.create({ body: { ...oldPayload, svpprofrace: "example" } });

@@ -107,6 +107,19 @@ export interface AdoptHouseholdEnrollmentInput {
  /** Complete linked cohort, including already exited participants. IDs are explicit, not inferred. */
  members:Array<{clientId:number;enrollmentId:number}>;
 }
+export interface HouseholdEnrollmentDiscoveryInput {headClientId:number;headEnrollmentId:number;}
+export interface HouseholdEnrollmentDiscoveryResult extends HouseholdEnrollmentDiscoveryInput {
+ householdId:number;householdSource:'verified-membership';providerId:number;type:string;
+ members:Array<{clientId:number;enrollmentId:number}>;
+}
+export interface AdoptHouseholdEnrollmentFromHeadInput extends HouseholdEnrollmentDiscoveryInput {key:string;}
+export interface RegisterEntryRowsInput {
+ key:string;enrollmentKey:string;clientId:number;
+ rows:Array<{key:string;parentField:string;recordsetId:number}>;
+}
+export interface RegisterEntryRowsResult {
+ key:string;enrollmentKey:string;clientId:number;enrollmentId:number;outcome:'verified'|'already-present';recordsetIds:Record<string,number>;
+}
 export interface EnrollmentWorkflowResult {
   key:string;
   outcome:'verified'|'already-present';
@@ -146,12 +159,16 @@ export interface EnrollmentWorkflow {
   exitEnrollment(input:ExitEnrollmentInput):Promise<ExitEnrollmentResult>;
   /** Patch an open entry at its original timestamp, before any review or exit. */
   correctEntry(input:EntryCorrectionInput):Promise<EntryCorrectionResult>;
+  /** Bind explicit existing row IDs to stable keys without writing HMIS records. */
+  registerEntryRows(input:RegisterEntryRowsInput):Promise<RegisterEntryRowsResult>;
+  /** Resolve a unique current household satisfying full-cohort membership/head/date checks. */
+  discoverHouseholdEnrollment(input:HouseholdEnrollmentDiscoveryInput):Promise<HouseholdEnrollmentDiscoveryResult>;
   /** Verify unchanged state and independently confirmed rejection; keeps the attempt history. */
   resolveEntryCorrection(input:ResolveEntryCorrectionInput):Promise<ResolveEntryCorrectionResult>;
   /** Verify an existing standalone entry and journal it without an HMIS write. */
   adoptEnrollment(input:AdoptEnrollmentInput):Promise<EnrollmentWorkflowResult>;
   /** Verify all existing linked entries, original head and dates; no HMIS writes. */
-  adoptHouseholdEnrollment(input:AdoptHouseholdEnrollmentInput):Promise<HouseholdEnrollmentResult>;
+  adoptHouseholdEnrollment(input:AdoptHouseholdEnrollmentInput|AdoptHouseholdEnrollmentFromHeadInput):Promise<HouseholdEnrollmentResult>;
   /** Reads the local journal only. A verified journal is not fresh server verification. */
   getStatus(input:{clientId:number;key:string}):Promise<EnrollmentWorkflowStatus|null>;
   createHouseholdEnrollment(input:HouseholdEnrollmentInput):Promise<HouseholdEnrollmentResult>;
@@ -242,12 +259,17 @@ export interface EnrollmentWorkflowOptions {
 }
 export class EnrollmentWorkflowError extends Error {
   readonly reason:string;
-  readonly code?:string;
+  readonly code:string;
+  readonly committed:false|'unknown';
+  readonly operation?:string;
+  /** Resolution-call failure does not establish the original correction's outcome. */
+  readonly originalCommitted?:'unknown';
+  readonly reauthenticated?:boolean;
   readonly fields?:string[];
   readonly status?:number;
   /** Failed durable stage, when known. The original write error is available as cause in memory. */
   readonly step?:string;
-  constructor(reason:string,options?:ErrorOptions&{step?:string;code?:string;fields?:string[];status?:number});
+  constructor(reason:string,options?:ErrorOptions&{step?:string;code?:string;fields?:string[];status?:number;committed?:false|'unknown'});
 }
 /** An unavailable list is never evidence that no enrollment exists. */
 export class EnrollmentReadError extends EnrollmentWorkflowError {

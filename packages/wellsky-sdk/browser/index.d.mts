@@ -17,10 +17,12 @@ export class LoginError extends Error {
 }
 export interface UiSession {readonly connection:UiConnection;browser: Browser;context: BrowserContext;page: Page;passwordRecovery:'restored-original'|'not-needed';ensureAuthenticated():Promise<void>;reauthenticate():Promise<void>;close():Promise<void>;}
 export interface PlaywrightGwtOptions {page:Page;tenant:string;moduleBaseUrl:string;}
-export interface PlaywrightEnrollmentSnapshot extends GwtEnrollmentSnapshot {providerId:number;enrollmentType:string;exits:readonly GwtEnrollmentExit[];}
+export interface PlaywrightEnrollmentSnapshot extends GwtEnrollmentSnapshot {providerId:number;enrollmentType:string;exits:readonly GwtEnrollmentExit[];groupId?:number|string|null;grouped?:boolean;}
 export interface EnrollmentListRow {
  enrollmentId:number;clientId:number;enrollmentProvider:number;type:string;
  projectStartDate:string;projectExitDate:string|null;isActive:boolean;
+ /** An enrollment group pointer, not a household identifier or member count. */
+ groupId:number|string|null;grouped:boolean;
 }
 export interface EnrollmentListSnapshot {
  source:'gwt-rpc';tenant:string;clientId:number;count:number;values:EnrollmentListRow[];

@@ -138,6 +138,29 @@ test('adopted standalone entries support interims and scalar-only corrections',a
   assert.equal(result.enrollmentId,50);assert.equal(f.counts.enrollment,1);
  }
 });
+test('adopted entries can bind existing row IDs and correct them without creating another row',async()=>{
+ const f=exitFixture(),created=await f.workflow().createEnrollment(entryInput());f.journal.clear();await f.workflow().adoptEnrollment({key:'adopted',clientId:1,enrollmentId:50});
+ const input={key:'bind-existing',enrollmentKey:'adopted',clientId:1,rows:[{key:'existing-a',parentField:'ROWS',recordsetId:created.recordsetIds.a},{key:'existing-b',parentField:'ROWS',recordsetId:created.recordsetIds.b}]},before=structuredClone(f.counts);
+ const result=await f.workflow().registerEntryRows(input);assert.deepEqual(result.recordsetIds,{'existing-a':created.recordsetIds.a,'existing-b':created.recordsetIds.b});assert.deepEqual(f.counts,before);
+ assert.equal((await f.workflow().registerEntryRows({...input,rows:[...input.rows].reverse()})).outcome,'already-present');assert.deepEqual(f.counts,before);
+ await f.workflow().correctEntry({key:'change-path',enrollmentKey:'adopted',clientId:1,subassessments:[{key:'existing-a',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}}}]});assert.equal(f.rows.length,2);
+ assert.equal(f.rows.find(r=>r.recordset_id===created.recordsetIds.a).sub_assessment_list.find(c=>c.virt_field_name==='TYPE').answer_value,'12');
+ const after=structuredClone(f.counts);await f.workflow().registerEntryRows(input);assert.deepEqual(f.counts,after);
+ await assert.rejects(f.workflow().registerEntryRows({...input,rows:[{...input.rows[0],recordsetId:created.recordsetIds.b}]}),e=>e.code==='ROW_REGISTRATION_INTENT_CONFLICT'&&e.committed===false);
+});
+test('row registration refuses absent, wrongly scoped and duplicate bindings before writes',async()=>{
+ const f=exitFixture(),created=await f.workflow().createEnrollment(entryInput());f.journal.clear();await f.workflow().adoptEnrollment({key:'adopted',clientId:1,enrollmentId:50});const before=structuredClone(f.counts);
+ for(const rows of [[{key:'wrong',parentField:'ROWS',recordsetId:999}],[{key:'wrong',parentField:'OTHER',recordsetId:created.recordsetIds.a}],[{key:'a',parentField:'ROWS',recordsetId:created.recordsetIds.a},{key:'b',parentField:'ROWS',recordsetId:created.recordsetIds.a}]])await assert.rejects(f.workflow().registerEntryRows({key:'registration',enrollmentKey:'adopted',clientId:1,rows}),e=>typeof e.code==='string'&&e.committed===false);
+ assert.deepEqual(f.counts,before);assert.deepEqual((await f.workflow().getStatus({clientId:1,key:'adopted'})).recordsetIds,{});
+});
+test('workflow errors classify known preflight failures and retain unknown after a write attempt',async()=>{
+ const f=exitFixture();await assert.rejects(f.workflow().createEnrollment({...entryInput(),clientId:0}),e=>e.code==='CLIENT_ID_REQUIRED'&&e.committed===false&&e.operation==='createEnrollment');
+ await f.workflow().createEnrollment(entryInput());
+ f.api.assessments.create=async()=>{throw Object.assign(new Error('Rejected'),{status:400});};
+ const correction={key:'bad',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}}};
+ await assert.rejects(f.workflow().correctEntry(correction),e=>e.code==='ENTRY_CORRECTION_UNCERTAIN'&&e.committed==='unknown');
+ await assert.rejects(f.workflow().resolveEntryCorrection({key:'bad',enrollmentKey:'entry-1',clientId:1,evidenceReference:'ref',confirmNotApplied:async()=>false}),e=>e.code==='INDEPENDENT_CONFIRMATION_REQUIRED'&&e.committed===false&&e.originalCommitted==='unknown');
+});
 test('standalone lost exit acknowledgement reconciles without resaving',async()=>{
  const f=exitFixture({lostExitResponse:true});await f.workflow().createEnrollment(entryInput());await f.workflow().exitEnrollment(exitInput());await f.workflow().exitEnrollment(exitInput());assert.equal(f.exitCounts.saves,1);
 });
@@ -381,6 +404,10 @@ test('entry creation uses the configured GWT list when a prior household makes R
  const result=await f.workflow({enrollmentSession}).createEnrollment(entryInput());
  assert.equal(result.enrollmentId,50);assert.equal(restReads,0);assert.ok(gwtReads>=2);assert.equal(f.counts.enrollment,1);
  const again=await f.workflow({enrollmentSession}).createEnrollment(entryInput());assert.equal(again.outcome,'already-present');assert.equal(f.counts.enrollment,1);
+});
+test('a shared scalar collision fails before enrollment creation or mobile batch writes',async()=>{
+ const f=fixture();f.history.push({field:'TOTAL',value:'9',date:entryDate});const before=structuredClone(f.counts);
+ await assert.rejects(f.workflow().createEnrollment(entryInput()),e=>e.code==='MOBILE_ANSWER_EXISTS'&&e.committed===false&&e.operation==='createEnrollment');assert.deepEqual(f.counts,before);assert.equal(await f.workflow().getStatus({clientId:1,key:'entry-1'}),null);
 });
 
 test('a fresh entry never adopts a matching exited enrollment and an old keyed retry retains its own ID',async()=>{

@@ -111,13 +111,14 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     page.on('request',listener);
     try{await openClient(clientId);wire=await captured;}finally{page.off('request',listener);}
     if(!wire?.policy||Object.values(wire.headers).some(v=>!v))throw Error('Fresh enrollment list context unavailable');
-    const rows=await mapped(`SELECT e.entryExitId AS enrollmentId, e.clientId AS clientId, e.entryDate AS projectStartDate, e.exitDate AS projectExitDate, e.providerId AS enrollmentProvider, e.typeEntryExit.name AS type FROM SpEntryExit AS e WHERE e.active = TRUE AND e.client.active = TRUE AND e.clientId = ${clientId} ORDER BY e.entryExitId`);
+    const rows=await mapped(`SELECT e.entryExitId AS enrollmentId, e.clientId AS clientId, e.entryDate AS projectStartDate, e.exitDate AS projectExitDate, e.providerId AS enrollmentProvider, e.typeEntryExit.name AS type, e.groupId AS groupId FROM SpEntryExit AS e WHERE e.active = TRUE AND e.client.active = TRUE AND e.clientId = ${clientId} ORDER BY e.entryExitId`);
     const ids=new Set();
     for(const row of rows){
       if(!Number.isSafeInteger(row.enrollmentId)||row.enrollmentId<=0||row.clientId!==clientId||!Number.isSafeInteger(row.enrollmentProvider)||row.enrollmentProvider<=0||typeof row.type!=='string'||!row.type.trim()||typeof row.projectStartDate!=='string'||!Number.isFinite(Date.parse(row.projectStartDate))||row.projectExitDate!==null&&(typeof row.projectExitDate!=='string'||!Number.isFinite(Date.parse(row.projectExitDate)))||ids.has(row.enrollmentId))throw Error('Invalid enrollment list');
       ids.add(row.enrollmentId);
+      if(row.groupId!==null){if(typeof row.groupId==='number'&&row.groupId<=0)throw Error('Invalid enrollment group');literal(row.groupId);}
     }
-    return {source:'gwt-rpc',tenant,clientId,count:rows.length,values:rows.map(row=>({...row,isActive:true}))};
+    return {source:'gwt-rpc',tenant,clientId,count:rows.length,values:rows.map(row=>({...row,isActive:true,grouped:row.groupId!==null}))};
   };
   const readEnrollment=async target=>{
     const model=await openTarget(target),householdClientIds=await householdIds(target);
@@ -149,7 +150,7 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
       reviews.push({reviewId:row.reviewId,type:row.type,reviewDate:row.reviewDate,clientIds:clients.map(c=>c.clientId).sort((a,b)=>a-b)});
     }
     reviews.sort((a,b)=>a.reviewId-b.reviewId);
-    const data={source:'gwt-rpc',tenant,sessionId,...target,projectStartDate:entry.projectStartDate,providerId:entry.providerId,enrollmentType:entry.enrollmentType,householdClientIds,members,exits,reviews};
+    const data={source:'gwt-rpc',tenant,sessionId,...target,projectStartDate:entry.projectStartDate,providerId:entry.providerId,enrollmentType:entry.enrollmentType,groupId:entry.groupId,grouped:entry.groupId!==null,householdClientIds,members,exits,reviews};
     return {...data,revision:digest(model+JSON.stringify({...data,sessionId:undefined}))};
   };
   const chooseMembers=async(desired,implicitClientId,dialogButton)=>{

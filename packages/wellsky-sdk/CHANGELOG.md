@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 - 2026-11-10
+
+- Add `createReadBackWriteLabelResolver` for exact observed lookup labels, including HUD suffixes. Unobserved options remain unresolved; no suffix is inferred from metadata.
+- Expose `groupId` and `grouped` on GWT enrollment catalog rows and details without per-row reads.
+- Add `discoverHouseholdEnrollment` and adoption from a head's client/enrollment IDs, requiring a unique verified household membership match.
+- Add `registerEntryRows` to bind existing recordsets to adopted entry keys for in-place corrections.
+- Add stable workflow error codes and per-operation `committed` markers, preserving uncertain prior writes and original causes.
+- Add `writeMobileAnswersChecked` and enrollment-workflow scalar collision preflight for questions shared across instruments.
+- Document missing diagnostics in 0.5.0 journals, the unsupported yes/no clear route, and integrator-reported 0.6.0 acceptance separately from local tests.
+
 ## 0.6.0 - 2026-11-10
 
 - Reject yes/no fields in `correctEntry.clear` before any correction write or new journal entry. Correct synthetic fixtures that incorrectly accepted blank yes/no values. Setting `No` remains supported.

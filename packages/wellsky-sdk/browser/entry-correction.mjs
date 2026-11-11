@@ -50,7 +50,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
   if(rows.some(q=>!object(q)||typeof q.virt_field_name!=='string')||new Set(rows.map(q=>q.virt_field_name)).size!==rows.length)fail('ambiguous correction assessment read');
   return rows;
  };
- const run=async(mode,raw)=>{
+ const run=async(mode,raw,operation={attempted:false})=>{
   const resolving=mode==='resolve';
   fields(raw,resolving?['key','enrollmentKey','clientId','evidenceReference','confirmNotApplied']:['key','enrollmentKey','clientId','answers','clear','subassessments']);
   const {confirmNotApplied,...serializable}=raw;
@@ -61,8 +61,10 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
   return store.withLock(scope(input.clientId),async()=>{
    const reservations=await store.withLock(reservationScope(input.clientId),()=>store.read(reservationScope(input.clientId)));
    if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'))fail('unfinished household workflow must be reconciled first');
+   if(!resolving)operation.attempted=true;
    const records=await store.read(scope(input.clientId));
    if(!Array.isArray(records)||records.some(r=>!object(r)||r.version!==1||!object(r.steps)))fail('invalid workflow journal');
+   if(!resolving)operation.attempted=records.some(r=>r.key===input.key&&Object.keys(r.steps).length>0);
    if(records.some(r=>r.stage!=='verified'&&!(r.kind==='correction'&&r.stage==='rejected')&&r.key!==input.key))fail('another unfinished workflow must be reconciled first');
    const entries=records.filter(r=>r.kind==='entry'&&r.key===input.enrollmentKey&&r.stage==='verified');
    if(entries.length!==1)fail('verified enrollment workflow required');const entry=entries[0];
@@ -162,7 +164,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
     for(const patch of input.subassessments??[]){
      fields(patch,['key','parentField','answers','clear']);key(patch.key);
      const id=entry.rows[patch.key],parent=definition.questions.find(q=>q.fieldName===patch.parentField&&q.questionType==='sub_assessment');
-     if(!positive(id)||ids.has(id)||!parent||!observed.rows[parent.fieldName]?.[id])fail('correction requires an existing entry row key and matching parent');ids.add(id);
+     if(!positive(id)||ids.has(id)||!parent||!observed.rows[parent.fieldName]?.[id]||entry.rowParents?.[patch.key]&&entry.rowParents[patch.key]!==patch.parentField)fail('correction requires an existing entry row key and matching parent');ids.add(id);
      const cells=encode(parent.children,patch.answers??{},patch.clear??[],'mobile');if(!cells.length)fail('empty row correction');
      rowPlans.push({id,parentField:parent.fieldName,questionId:parent.questionId,cells});
     }
@@ -184,7 +186,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
     if(record.steps[name])throw uncertain();
     if(!await inspect(null))fail('entry changed since correction preflight');
     await verifyEnrollment();record.steps[name]={state:'attempted'};await persist();let cause;
-    try{await submit();}catch(e){
+    operation.attempted=true;try{await submit();}catch(e){
      cause=e;const failure=correctionFailureDetails(e);
      if(Object.keys(failure).length){record.steps[name].failure=failure;await persist();}
     }
@@ -201,5 +203,5 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    record.stage='verified';await persist();return result('verified');
   });
  };
- return {correctEntry:raw=>run('correct',raw),resolveEntryCorrection:raw=>run('resolve',raw)};
+ return {correctEntry:(raw,operation)=>run('correct',raw,operation),resolveEntryCorrection:raw=>run('resolve',raw)};
 }

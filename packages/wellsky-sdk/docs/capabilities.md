@@ -86,3 +86,16 @@ The integrator reported these results using SDK 0.4.1 in the training tenant. Th
 - After those household exits, both re-enrollment attempts failed on the pre-create REST list with HTTP 400 from the grouped-enrollment `42703` gap. This confirms that an exited household enrollment can still break that REST list.
 
 The GWT catalog correction has regression coverage for individual creation, household heads and member preflight, failed-read classification and re-enrollment. Same-date entry corrections and adoption of manual enrollments have synthetic coverage. These newer paths have not been independently verified live.
+
+## Integrator-reported SDK 0.6.0 acceptance
+
+The integrator reports these training-tenant results on November 10 and 11, 2026; the SDK team has not independently rerun them:
+
+- GWT `listEnrollments` succeeded for a household client whose REST list returned HTTP 400.
+- Standalone `adoptEnrollment` followed by `createInterim`, and single-person same-day `correctEntry`, succeeded. Same-key repeats made no writes.
+- Three pending 0.5.0 corrections were refused without confirmation and resolved as `rejected` with confirmation.
+- Earlier 0.5.0 runs verified individual/household adoption followed by exit, household re-enrollment after exit, and path corrections in both directions for individuals and households, with no-write same-key repeats.
+
+The integrator has not tested household adoption followed by `createHouseholdInterim`, scalar correction on an adopted enrollment, or a new correction key after resolution. Synthetic tests do not replace that acceptance.
+
+The 0.7.0 label resolver, group flags, household discovery, row registration, error codes and mobile collision preflight have local regression coverage, not new live tenant acceptance. Full write labels remain unresolved for unobserved options. Household discovery refuses ambiguous current-membership matches. Yes/no blanking remains unsupported; no alternative route has been verified.
