@@ -28,6 +28,9 @@ Successful adoption of an existing record also needs its journal. Retain it even
 | `DefinitionDriftError`, `UnknownPicklistValueError` | Metadata or lookup assumption changed | Refresh/review definitions and application mapping. Do not guess a numeric option |
 | `AmbiguousCommitError` | Mutation outcome not established | Keep journal pending; re-read through the workflow's authoritative path |
 | `GwtEnrollmentConflictError` | Duplicate/partial/conflicting enrollment or review | Inspect membership and review instant. Do not replay the captured request |
+| `UNSUPPORTED_YES_NO_CLEAR` | A correction attempted to blank a yes/no field | Fix the plan before any write; `No` and blank are different states |
+| `ENTRY_CORRECTION_UNCERTAIN` | An attempted correction is not verified | Inspect `status`, `cause`, and journal step diagnostics; use [explicit resolution](enrollments.md#resolve-a-rejected-correction) only with independent non-application evidence |
+| `ENTRY_CORRECTION_REJECTED` | The old correction key was resolved as not applied | Keep its audit record and use a new key for corrected intent |
 | `EnrollmentWorkflowError` | Invalid plan, missing head, schema drift, conflict, or unresolved stage | Inspect the specific reason and local status; fix application inputs only before reservation, otherwise reconcile original intent |
 | `SessionInterruptedError`, `SESSION_INTERRUPTED` | Managed page operation ended around session expiry | Check `reauthenticated`; retry the original workflow call, never its prepared RPC |
 | `LoginError`, `PASSWORD_EXPIRED` | Expiration detected with recovery disabled | Use the documented recovery option or resolve the password outside the helper |

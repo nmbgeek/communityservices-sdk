@@ -1,7 +1,7 @@
 import {apiScope} from './connection.mjs';
 import {validateBirthDate} from './date-of-birth.mjs';
 import {expectedExitDetails} from './exit-details.mjs';
-import {createEntryCorrector} from './entry-correction.mjs';
+import {createEntryCorrector,correctionFailureDetails} from './entry-correction.mjs';
 import {createHash} from 'node:crypto';
 import {readProgramCatalog,encodeAnswers,encodeNewSubassessmentRow,toItems,parseRestInstant} from '../dist/esm/index.js';
 
@@ -11,7 +11,16 @@ const entryExitTypes=['HUD','Basic','Standard','RHY','VA','Basic Center Program 
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
 const fail=message=>{throw new EnrollmentWorkflowError(message);};
-export class EnrollmentWorkflowError extends Error {constructor(reason,options){super(`Enrollment workflow: ${reason}`,options);this.name='EnrollmentWorkflowError';this.reason=reason;if(options?.step!==undefined)this.step=options.step;}}
+export class EnrollmentWorkflowError extends Error {
+ constructor(reason,options){
+  super(`Enrollment workflow: ${reason}`,options);this.name='EnrollmentWorkflowError';this.reason=reason;
+  if(options?.step!==undefined)this.step=options.step;
+  if(options?.code!==undefined)this.code=options.code;
+  if(options?.fields!==undefined)this.fields=[...options.fields];
+  const status=options?.status??options?.cause?.status;
+  if(Number.isInteger(status)&&status>=100&&status<=599)this.status=status;
+ }
+}
 export class EnrollmentReadError extends EnrollmentWorkflowError {
  constructor({clientId,source,writeAttempted,cause}){
   super(cause instanceof EnrollmentWorkflowError?cause.reason:'enrollment list unavailable',{step:'enrollment-read',cause});this.name='EnrollmentReadError';this.code='ENROLLMENT_READ_FAILED';this.clientId=clientId;this.source=source;this.phase=writeAttempted?'reconciliation':'preflight';this.committed=writeAttempted?'unknown':false;
@@ -129,7 +138,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
  };
  const scope=clientId=>JSON.stringify([tenantScope,'enrollment-workflow',clientId]);
  const reservationScope=clientId=>JSON.stringify([tenantScope,'household-workflow-reservation',clientId]);
- const correctEntry=createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,scope,reservationScope,makeError:(reason,options)=>new EnrollmentWorkflowError(reason,options)});
+ const {correctEntry,resolveEntryCorrection}=createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,scope,reservationScope,makeError:(reason,options)=>new EnrollmentWorkflowError(reason,options)});
  const run=async(kind,raw,internal={})=>{
   const standaloneExit=kind==='exit'&&internal.standaloneExit===true;
   fields(raw,kind==='entry'?['key','clientId','providerId','type','entryDate','assessment']:['key','enrollmentKey','clientId',kind==='exit'?'exitDate':'reviewDate','assessment',...(standaloneExit?['destination','reasonForLeaving','destinationDetails','reasonForLeavingOther']:[])]);
@@ -145,7 +154,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const reservations=await store.withLock(reservationScope(input.clientId),()=>store.read(reservationScope(input.clientId)));
    if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'&&r.owner!==internal.owner))fail('unfinished household workflow must be reconciled first');
    const records=await store.read(scope(input.clientId));if(!Array.isArray(records)||records.some(r=>!object(r)||r.version!==1||!object(r.steps)))fail('invalid workflow journal');
-   if(records.some(r=>r.stage!=='verified'&&r.key!==input.key))fail('another unfinished workflow must be reconciled first');
+   if(records.some(r=>r.stage!=='verified'&&!(r.kind==='correction'&&r.stage==='rejected')&&r.key!==input.key))fail('another unfinished workflow must be reconciled first');
    const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate journal keys');let record=matches[0];
    const intentHash=hash({kind,input,...(internal.owner?{household:internal.owner}:{})});if(record&&record.intentHash!==intentHash)fail('key conflicts with previous intent');
    // Changing the yes/no endpoint after an attempt would be an endpoint switch, not reconciliation.
@@ -387,7 +396,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
      if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'&&r.owner!==owner))fail('unfinished household workflow must be reconciled first');
      const records=await store.read(scope(target.clientId)),member=household?memberKey(input.key,target.clientId):input.key;
      if(!Array.isArray(records)||records.some(r=>r.version!==1||!object(r.steps)))fail('invalid workflow journal');
-     if(records.some(r=>r.stage!=='verified'&&r.key!==member))fail('another unfinished workflow must be reconciled first');
+     if(records.some(r=>r.stage!=='verified'&&!(r.kind==='correction'&&r.stage==='rejected')&&r.key!==member))fail('another unfinished workflow must be reconciled first');
      if(records.some(r=>r.kind==='entry'&&r.enrollmentId===target.enrollmentId&&r.key!==member))fail('enrollment already journaled; use its existing entry key');
      const matches=records.filter(r=>r.key===member);if(matches.length>1)fail('duplicate journal keys');
      if(matches[0]&&(!matches[0].adopted||matches[0].intentHash!==intentHash))fail('adoption key conflicts with previous intent');
@@ -690,6 +699,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
  };
  return {
   correctEntry,
+  resolveEntryCorrection,
   adoptEnrollment:input=>adopt(false,input),adoptHouseholdEnrollment:input=>adopt(true,input),
   addHouseholdMembers:input=>householdRun('addition',input),
   createHouseholdEnrollment:input=>householdRun('entry',input),createHouseholdInterim:input=>householdRun('interim',input),exitHousehold:input=>householdRun('exit',input),
@@ -710,7 +720,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const records=await store.read(scope(input.clientId));if(!Array.isArray(records))fail('invalid workflow journal');
     const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate journal keys');const r=matches[0];if(!r)return null;
     if(r.version!==1||!object(r.steps))fail('invalid workflow journal');
-    return {key:r.key,kind:r.kind,stage:r.stage,assessmentCode:r.assessmentCode,...(r.enrollmentId?{enrollmentId:r.enrollmentId}:{}),...(r.reviewId?{reviewId:r.reviewId}:{}),...(r.projectExitDate?{projectExitDate:r.projectExitDate,exitSubgroupId:r.exitSubgroupId}:{}),recordsetIds:structuredClone(r.rows),steps:Object.entries(r.steps).map(([name,step])=>({name,state:step.state}))};
+    return {key:r.key,kind:r.kind,stage:r.stage,assessmentCode:r.assessmentCode,...(r.enrollmentId?{enrollmentId:r.enrollmentId}:{}),...(r.reviewId?{reviewId:r.reviewId}:{}),...(r.projectExitDate?{projectExitDate:r.projectExitDate,exitSubgroupId:r.exitSubgroupId}:{}),...(r.resolution?{resolution:structuredClone(r.resolution)}:{}),recordsetIds:structuredClone(r.rows),steps:Object.entries(r.steps).map(([name,step])=>({name,state:step.state,...(step.failure?{failure:correctionFailureDetails(step.failure)}:{})}))};
    });
   },
  };

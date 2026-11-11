@@ -50,6 +50,7 @@ function fixture(faults={}) {
       async get({query}){return readAnswers(query?.dateEffective);},
       async create({body,query}){
         counts.standard=(counts.standard??0)+1;if(faults.noStandardCommit)throw Error('Standard write failed without acknowledgement');
+        if(body.some(q=>q.question_type==='yes_no'&&q.answer_value===''))throw Object.assign(new Error('Provided answer for yes/no question is invalid'),{status:400,kind:'http'});
         const missing=metadata.filter(q=>q.mandatory&&!body.some(b=>b.virt_field_name===q.fieldName));if(missing.length)throw Error('All mandatory answers are not provided');
         for(const q of body){const meta=metadata.find(m=>m.fieldName===q.virt_field_name),value=q.answer_value===''?null:meta.questionType==='lookup'?String(meta.options.find(o=>o.name===q.answer_value).id):q.answer_value;history.push({field:q.virt_field_name,value,date:query.dateEffective});}
         if(faults.lostStandardResponse)throw Error('Response lost after commit');return {success:true};
@@ -130,6 +131,13 @@ test('standalone adoption rejects incomplete context and linked groups before jo
   await assert.rejects(f.workflow().adoptEnrollment({key:'manual',clientId:1,enrollmentId:50}));assert.equal(f.journal.size,0);assert.deepEqual(f.counts,before);
  }
 });
+test('adopted standalone entries support interims and scalar-only corrections',async()=>{
+ for(const action of ['interim','correction']){
+  const f=exitFixture();await f.workflow().createEnrollment(entryInput());f.journal.clear();await f.workflow().adoptEnrollment({key:'adopted',clientId:1,enrollmentId:50});
+  const result=action==='interim'?await f.workflow().createInterim({key:'review',enrollmentKey:'adopted',clientId:1,reviewDate,assessment:exitInput().assessment}):await f.workflow().correctEntry({key:'correct',enrollmentKey:'adopted',clientId:1,answers:{TOTAL:{value:12}}});
+  assert.equal(result.enrollmentId,50);assert.equal(f.counts.enrollment,1);
+ }
+});
 test('standalone lost exit acknowledgement reconciles without resaving',async()=>{
  const f=exitFixture({lostExitResponse:true});await f.workflow().createEnrollment(entryInput());await f.workflow().exitEnrollment(exitInput());await f.workflow().exitEnrollment(exitInput());assert.equal(f.exitCounts.saves,1);
 });
@@ -188,6 +196,66 @@ test('concurrent standalone exit calls share the client journal lock',async()=>{
  const f=exitFixture();await f.workflow().createEnrollment(entryInput());const results=await Promise.all([f.workflow().exitEnrollment(exitInput()),f.workflow().exitEnrollment(exitInput())]);assert.equal(f.exitCounts.saves,1);assert.deepEqual(results.map(r=>r.outcome),['verified','already-present']);
 });
 
+test('yes/no clear is rejected before any scalar or row write and before a correction journal is created',async()=>{
+ const f=exitFixture();f.metadata.push(question(9,'YESNO','yes_no'));const entry=entryInput();entry.assessment.notApplicable.YESNO='Not collected';await f.workflow().createEnrollment(entry);let sent=0;
+ f.api.assessments.create=async()=>{sent++;throw Object.assign(new Error('Provided answer for yes/no question is invalid'),{status:400,kind:'http'});};
+ const before=structuredClone(f.counts);
+ await assert.rejects(f.workflow().correctEntry({key:'bad-clear',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}},clear:['YESNO'],subassessments:[{key:'a',parentField:'ROWS',clear:['AMOUNT']}]}),e=>e.code==='UNSUPPORTED_YES_NO_CLEAR'&&e.fields.includes('YESNO'));
+ assert.equal(sent,0);assert.deepEqual(f.counts,before);assert.equal(await f.workflow().getStatus({clientId:1,key:'bad-clear'}),null);
+});
+test('correction HTTP status survives helper replacement without persisting response bodies or replaying a 400',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());let sent=0;
+ const cause=Object.assign(new Error('Synthetic invalid lookup'),{status:400,kind:'http',responseBody:'PRIVATE_RESPONSE_SENTINEL'});
+ f.api.assessments.create=async()=>{sent++;throw cause;};
+ const input={key:'rejected-correction',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}}};
+ await assert.rejects(f.workflow().correctEntry(input),e=>e.status===400&&e.cause===cause&&e.code==='ENTRY_CORRECTION_UNCERTAIN');
+ await assert.rejects(f.workflow().correctEntry(input),e=>e.status===400&&e.code==='ENTRY_CORRECTION_UNCERTAIN');
+ assert.equal(sent,1);const status=await f.workflow().getStatus({clientId:1,key:input.key});assert.deepEqual(status.steps.find(s=>s.name==='scalars').failure,{status:400,kind:'http'});
+ assert.ok(!JSON.stringify([...f.journal]).includes('PRIVATE_RESPONSE_SENTINEL'));
+});
+test('explicit rejection resolution keeps history and requires independent confirmation before a new correction key',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());const originalWrite=f.api.assessments.create;let attempts=0;
+ f.api.assessments.create=async()=>{attempts++;throw Object.assign(new Error('Invalid input'),{status:400,kind:'http'});};
+ const input={key:'rejected',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}}};await assert.rejects(f.workflow().correctEntry(input));
+ const record=[...f.journal.values()].flat().find(r=>r.key===input.key),originalHash=record.intentHash;
+ const resolution={key:input.key,enrollmentKey:input.enrollmentKey,clientId:1,evidenceReference:'review-123',confirmNotApplied:async evidence=>{assert.equal(evidence.matchesBefore,true);assert.equal(evidence.steps[0].failure.status,400);return true;}};
+ await assert.rejects(f.workflow().resolveEntryCorrection({...resolution,confirmNotApplied:async()=>false}),/independent non-application/);
+ const resolved=await f.workflow().resolveEntryCorrection(resolution);assert.equal(resolved.outcome,'rejected');assert.equal(attempts,1);
+ const status=await f.workflow().getStatus({clientId:1,key:input.key});assert.equal(status.stage,'rejected');assert.equal(status.steps[0].state,'attempted');assert.equal(status.resolution.evidenceReference,'review-123');
+ assert.equal([...f.journal.values()].flat().find(r=>r.key===input.key).intentHash,originalHash);
+ await assert.rejects(f.workflow().correctEntry(input),e=>e.code==='ENTRY_CORRECTION_REJECTED');
+ f.api.assessments.create=originalWrite;await f.workflow().correctEntry({...input,key:'corrected-intent',answers:{TOTAL:{value:13}}});
+ assert.equal((await f.workflow().resolveEntryCorrection(resolution)).outcome,'already-rejected');await f.workflow().createEnrollment(entryInput());assert.equal(f.history.filter(h=>h.field==='TOTAL').at(-1).value,'13');
+});
+test('rejection resolution supports older journals without failure metadata but cannot erase a partial commit',async()=>{
+ for(const partial of [false,true]){
+  const f=exitFixture();await f.workflow().createEnrollment(entryInput());let confirmed=0;
+  f.api.assessments.create=async({query})=>{if(partial)f.history.push({field:'TOTAL',value:'12',date:query.dateEffective});throw Object.assign(new Error('Rejected'),{status:400});};
+  const input={key:'old-correction',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12},OPTIONAL:{value:'Changed'}}};await assert.rejects(f.workflow().correctEntry(input));
+  for(const records of f.journal.values()){const r=records.find(r=>r.key===input.key);if(r)delete r.steps.scalars.failure;}
+  const resolution={key:input.key,enrollmentKey:input.enrollmentKey,clientId:1,evidenceReference:'external-verification',confirmNotApplied:async()=>{confirmed++;return true;}};
+  if(partial){await assert.rejects(f.workflow().resolveEntryCorrection(resolution),/differs from its pre-write/);assert.equal(confirmed,0);assert.equal((await f.workflow().getStatus({clientId:1,key:input.key})).stage,'pending');}
+  else assert.equal((await f.workflow().resolveEntryCorrection(resolution)).outcome,'rejected');
+ }
+});
+test('resolution rechecks state after independent confirmation and refuses intervening changes',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());f.api.assessments.create=async()=>{throw Object.assign(new Error('Rejected'),{status:400});};
+ const input={key:'correction',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}}};await assert.rejects(f.workflow().correctEntry(input));
+ await assert.rejects(f.workflow().resolveEntryCorrection({key:input.key,enrollmentKey:input.enrollmentKey,clientId:1,evidenceReference:'review',confirmNotApplied:async()=>{f.history.push({field:'TOTAL',value:'99',date:entryDate});return true;}}),/changed during resolution/);
+ assert.equal((await f.workflow().getStatus({clientId:1,key:input.key})).stage,'pending');
+});
+test('correction keeps both write and reconciliation errors while surfacing the original HTTP status',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());const read=f.api.assessments.get;let attempted=false;
+ const writeError=Object.assign(new Error('Rejected'),{status:400,kind:'http'}),readError=Object.assign(new Error('Read failed'),{status:503,kind:'http'});
+ f.api.assessments.create=async()=>{attempted=true;throw writeError;};f.api.assessments.get=async input=>{if(attempted)throw readError;return read(input);};
+ await assert.rejects(f.workflow().correctEntry({key:'correction',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}}}),e=>e.status===400&&e.cause instanceof AggregateError&&e.cause.errors[0]===writeError&&e.cause.errors[1]===readError);
+});
+test('a 400 after a committed correction verifies successfully and cannot be resolved as rejected',async()=>{
+ const f=exitFixture();await f.workflow().createEnrollment(entryInput());const write=f.api.assessments.create;
+ f.api.assessments.create=async input=>{await write(input);throw Object.assign(new Error('Response failure after commit'),{status:400,kind:'http'});};
+ const input={key:'correction',enrollmentKey:'entry-1',clientId:1,answers:{TOTAL:{value:12}}};assert.equal((await f.workflow().correctEntry(input)).outcome,'verified');
+ await assert.rejects(f.workflow().resolveEntryCorrection({key:input.key,enrollmentKey:input.enrollmentKey,clientId:1,evidenceReference:'incorrect-claim',confirmNotApplied:async()=>true}),/verified correction cannot be rejected/);
+});
 test('entry correction updates scalars and existing rows, clears values and preserves original entry retries',async()=>{
  const f=exitFixture();f.metadata.push(question(9,'YESNO','yes_no'));
  const entry=entryInput();delete entry.assessment.notApplicable.OPTIONAL;entry.assessment.answers.OPTIONAL={value:'Old location'};entry.assessment.answers.YESNO={value:true};
@@ -199,8 +267,8 @@ test('entry correction updates scalars and existing rows, clears values and pres
  assert.equal(f.history.filter(h=>h.field==='OPTIONAL').at(-1).value,null);assert.equal(f.history.filter(h=>h.field==='YESNO').at(-1).value,'No');
  const before=structuredClone(f.counts);assert.equal((await workflow().correctEntry(input)).outcome,'already-present');
  assert.equal((await workflow().createEnrollment(entry)).outcome,'already-present');assert.deepEqual(f.counts,before);
- const reverse={...input,key:'path-change-back',answers:{TOTAL:{value:0},OPTIONAL:{value:'Old location'}},clear:['YESNO'],subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'A'}}}},{key:'b',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}}}]};
- await workflow().correctEntry(reverse);assert.equal(f.history.filter(h=>h.field==='YESNO').at(-1).value,null);assert.equal(f.rows.length,2);
+ const reverse={...input,key:'path-change-back',answers:{TOTAL:{value:0},OPTIONAL:{value:'Old location'},YESNO:{value:true}},clear:[],subassessments:[{key:'a',parentField:'ROWS',answers:{TYPE:{option:{code:'A'}}}},{key:'b',parentField:'ROWS',answers:{TYPE:{option:{code:'B'}}}}]};
+ await workflow().correctEntry(reverse);assert.equal(f.history.filter(h=>h.field==='YESNO').at(-1).value,'Yes');assert.equal(f.rows.length,2);
  const after=structuredClone(f.counts);await workflow().correctEntry(input);await workflow().createEnrollment(entry);assert.deepEqual(f.counts,after);
 });
 test('entry correction preflights unsupported row types and unknown row keys before scalar writes',async()=>{
@@ -241,7 +309,7 @@ test('original entry retries accept a verified correction of an originally blank
  const before=structuredClone(f.counts);await workflow().createEnrollment(input);assert.deepEqual(f.counts,before);
 });
 
-test('same-date path correction clears 33 scalars and one row text cell while editing two distinct rows in place',async()=>{
+test('path correction rejects yes/no clears and edits supported fields and two existing rows',async()=>{
  const at='2026-11-09T16:00:00Z',f=exitFixture({changeSnapshot:s=>s.projectStartDate=at});
  const options=[option(11,'OLD'),option(12,'NEW')],lookup=(id,field)=>question(id,field,'lookup',{options});
  const yesFields=Array.from({length:27},(_,i)=>`LOCAL_YES_NO_${i+1}`);
@@ -263,8 +331,11 @@ test('same-date path correction clears 33 scalars and one row text cell while ed
   {key:'cls-entry',parentField:cls,answers:{SVP_HUD_CLS_CURRENTLIVINGSIT:{option:{code:'NEW'}}},clear:['SVP_HUD_CLS_LOCATIONDETAILS']},
   {key:'ce-entry',parentField:ce,answers:{SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL:{option:{code:'NEW'}}}},
  ]};
- const corrected=await workflow().correctEntry(input);assert.deepEqual(corrected.recordsetIds,created.recordsetIds);assert.equal(f.rows.length,2);assert.equal(clearFields.length,33);
- for(const field of clearFields)assert.equal(f.history.filter(h=>h.field===field).at(-1).value,null);
+ const beforeRejected=structuredClone(f.counts);await assert.rejects(workflow().correctEntry(input),e=>e.code==='UNSUPPORTED_YES_NO_CLEAR');assert.deepEqual(f.counts,beforeRejected);assert.deepEqual(f.rows,beforeRows);assert.equal(clearFields.length,33);
+ // This explicit application change exercises only supported clears; the SDK never drops fields itself.
+ input.clear=clearFields.slice(0,6);
+ const corrected=await workflow().correctEntry(input);assert.deepEqual(corrected.recordsetIds,created.recordsetIds);assert.equal(f.rows.length,2);
+ for(const field of input.clear)assert.equal(f.history.filter(h=>h.field===field).at(-1).value,null);
  assert.equal(f.history.filter(h=>h.field==='HUD_LENGTHSTAY_LESS7NIGHTS').at(-1).value,'No');
  for(const original of beforeRows){
   const current=f.rows.find(r=>r.recordset_id===original.recordset_id);assert.ok(current);
@@ -272,7 +343,8 @@ test('same-date path correction clears 33 scalars and one row text cell while ed
  }
  const writes=structuredClone(f.counts);await workflow().correctEntry(input);await workflow().createEnrollment(entry);assert.deepEqual(f.counts,writes);
  const reverse={...input,key:'literal-homeless-path',answers:{...oldAnswers,TYPEOFLIVINGSITUATION:{option:{code:'OLD'}},HUD_LENGTHOFSTAY:{option:{code:'OLD'}},HPTARGETINGSCORETOTAL:{value:0}},clear:['HUD_LENGTHSTAY_LESS7NIGHTS'],subassessments:[{key:'cls-entry',parentField:cls,answers:{SVP_HUD_CLS_CURRENTLIVINGSIT:{option:{code:'OLD'}},SVP_HUD_CLS_LOCATIONDETAILS:{value:'Mornings at the library'}}},{key:'ce-entry',parentField:ce,answers:{SVP_HUD_COORDENTRYASSESS_ASSESSLEVEL:{option:{code:'OLD'}}}}]};
- await workflow().correctEntry(reverse);assert.equal(f.history.filter(h=>h.field==='HUD_LENGTHSTAY_LESS7NIGHTS').at(-1).value,null);assert.deepEqual(f.rows,beforeRows);
+ await assert.rejects(workflow().correctEntry(reverse),e=>e.code==='UNSUPPORTED_YES_NO_CLEAR');reverse.clear=[];
+ await workflow().correctEntry(reverse);assert.equal(f.history.filter(h=>h.field==='HUD_LENGTHSTAY_LESS7NIGHTS').at(-1).value,'No');assert.deepEqual(f.rows,beforeRows);
  const finalWrites=structuredClone(f.counts);await workflow().correctEntry(input);await workflow().createEnrollment(entry);assert.deepEqual(f.counts,finalWrites);
 });
 
