@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 - 2026-11-11
+
+- Resolve full lookup write labels without existing answers using `enrollmentSession.readPicklistOptions` and `createCatalogWriteLabelResolver`.
+- Discover labels automatically in enrollment workflows when the configured session supports catalog reads and no explicit `writeLabel` override is supplied, including corrections and mandatory carry-forward.
+- Match option ID, picklist ID and code; preserve full names including HUD suffixes, and reject incomplete or mismatched catalogs before writes. Read explicit option IDs in bounded batches.
+- Read-only training verification matched 1,288 distinct catalog options to Coordinated Entry metadata from three synthetic clients, including the shared enhanced yes/no list and living-situation options. Live profile dropdowns matched the DOB-quality catalog labels. No new assessment writes were performed.
+
 ## 0.7.0 - 2026-11-10
 
 - Add `createReadBackWriteLabelResolver` for exact observed lookup labels, including HUD suffixes. Unobserved options remain unresolved; no suffix is inferred from metadata.

@@ -1,5 +1,5 @@
 import type {DateOfBirth} from './date-of-birth.mjs';
-import type {Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
+import type {PicklistCatalogSnapshot, Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
 import type {UiMutationStore,EnrollmentReader} from './index.mjs';
 import type {ProviderAssessmentItem, ProgramDiscovery} from './program-discovery.mjs';
 import type {HouseholdExitUi,HouseholdExitDetailInput} from './household-exit.mjs';
@@ -41,6 +41,8 @@ export interface EnrollmentDiscoveryInput {
   entryDate:string;
 }
 export interface EnrollmentWorkflowDiscovery {
+  /** Current exact label catalog when automatic browser discovery is available. */
+  picklistOptions?:PicklistCatalogSnapshot;
   provider:Provider;
   entry:{assessment:ProviderAssessmentItem;definition:AssessmentDefinition};
   interim:{assessment:ProviderAssessmentItem;definition:AssessmentDefinition};
@@ -254,7 +256,7 @@ export interface EnrollmentWorkflowOptions {
    * `standard` writes them through `assessments.create` with every mandatory answer, after the mobile scalars;
    * every mandatory question must be a lookup. An unfinished journal never reconciles in the other mode. */
   yesNoWrites?:'mobile'|'standard';
-  /** Required for `yesNoWrites: 'standard'`: tenant-verified labels for mandatory lookup answers. */
+  /** Explicit tenant-verified override. When omitted, a configured readPicklistOptions reader supplies exact catalog labels automatically. */
   writeLabel?:EncodingOptions['writeLabel'];
 }
 export class EnrollmentWorkflowError extends Error {

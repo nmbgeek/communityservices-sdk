@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {encodeAnswers,parseRestInstant,toItems} from '../dist/esm/index.js';
+import {createCatalogWriteLabelResolver,encodeAnswers,parseRestInstant,toItems} from '../dist/esm/index.js';
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
@@ -24,7 +24,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
   if(type==='int'||type==='money'){const n=Number(v);if(!Number.isFinite(n))fail('invalid stored correction number');return n;}
   return String(v);
  };
- const encode=(questions,answers,clear,endpoint)=>{
+ const encode=(questions,answers,clear,endpoint,writeLabel)=>{
   if(!object(answers)||!Array.isArray(clear)||new Set(clear).size!==clear.length||clear.some(f=>typeof f!=='string'||Object.hasOwn(answers,f)))fail('invalid or conflicting correction answers and clears');
   const index=new Map(questions.map(q=>[q.fieldName,q]));
   const unsupportedClears=clear.filter(field=>index.get(field)?.questionType==='yes_no');
@@ -94,7 +94,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    const discovered=await discover({clientId:input.clientId,providerId,type,entryDate:at});
    const schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
    if(schemaHash!==entry.schemaHash||record&&schemaHash!==record.schemaHash)fail('program assessment configuration changed');
-   const definition=discovered.entry.definition,code=definition.assessmentCode;
+   const definition=discovered.entry.definition,operationWriteLabel=writeLabel??(discovered.picklistOptions?createCatalogWriteLabelResolver(discovered.entry.definition,discovered.picklistOptions):undefined),code=definition.assessmentCode;
    const snapshot=async()=>{
     const raw=await readQuestions(input.clientId,code,readAt),current=await readQuestions(input.clientId,code,new Date(Math.max(Date.now(),parseRestInstant(readAt))).toISOString());
     const scalars={},rows={};
@@ -145,7 +145,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    if(!record){
     readOverrides(observed);
     const answers=input.answers??{},clear=input.clear??[];
-    const scalarBody=encode(definition.questions,answers,clear,'standalone'),scalarExpected=expected(definition.questions,scalarBody,answers);
+    const scalarBody=encode(definition.questions,answers,clear,'standalone',operationWriteLabel),scalarExpected=expected(definition.questions,scalarBody,answers);
     // The standard endpoint requires every mandatory scalar, even if this patch leaves it unchanged.
     if(scalarBody.length)for(const q of definition.questions.filter(q=>q.mandatory&&!['label','blank','sub_assessment'].includes(q.questionType)&&!scalarBody.some(c=>c.virt_field_name===q.fieldName))){
      if(q.fieldName==='SVPPROFDOB'||!scalarTypes.has(q.questionType))fail('unsupported mandatory correction field');
@@ -153,10 +153,10 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
      if(prior?.answer_value===null||prior?.answer_value===undefined||prior?.answer_value==='')fail('mandatory correction field requires an explicit answer or clear');
      let body;
      if(q.questionType==='lookup'){
-      const options=q.options.filter(o=>String(o.id)===String(prior.answer_value)),label=options.length===1?writeLabel?.(q,options[0]):undefined;
+      const options=q.options.filter(o=>String(o.id)===String(prior.answer_value)),label=options.length===1?operationWriteLabel?.(q,options[0]):undefined;
       if(!label)fail('mandatory correction lookup label unavailable');
       body=[{question_id:q.questionId,question_type:q.questionType,virt_field_name:q.fieldName,answer_value:label}];
-     }else body=encodeAnswers([q],{[q.fieldName]:{value:prior.answer_value}},{endpoint:'standalone',writeLabel});
+     }else body=encodeAnswers([q],{[q.fieldName]:{value:prior.answer_value}},{endpoint:'standalone',writeLabel:operationWriteLabel});
      if(body.length!==1)fail('mandatory correction field could not be encoded');scalarBody.push(body[0]);
      scalarExpected.push({...body[0],answer_value:prior.answer_value});
     }
@@ -165,7 +165,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
      fields(patch,['key','parentField','answers','clear']);key(patch.key);
      const id=entry.rows[patch.key],parent=definition.questions.find(q=>q.fieldName===patch.parentField&&q.questionType==='sub_assessment');
      if(!positive(id)||ids.has(id)||!parent||!observed.rows[parent.fieldName]?.[id]||entry.rowParents?.[patch.key]&&entry.rowParents[patch.key]!==patch.parentField)fail('correction requires an existing entry row key and matching parent');ids.add(id);
-     const cells=encode(parent.children,patch.answers??{},patch.clear??[],'mobile');if(!cells.length)fail('empty row correction');
+     const cells=encode(parent.children,patch.answers??{},patch.clear??[],'mobile',operationWriteLabel);if(!cells.length)fail('empty row correction');
      rowPlans.push({id,parentField:parent.fieldName,questionId:parent.questionId,cells});
     }
     if(!scalarBody.length&&!rowPlans.length)fail('empty entry correction');

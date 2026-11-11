@@ -84,10 +84,10 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
       try{const r=await fetch(url,{method:'POST',headers,body,credentials:'same-origin',redirect:'error',signal:controller.signal});return {status:r.status,body:await r.text()};}finally{clearTimeout(timer);}
     },request);
   };
-  const mapped=async query=>{
+  const mapped=async(query,limit=1001)=>{
     if(!wire||!/^SELECT /.test(query)||/[|\\\r\n]/.test(query))throw Error('Invalid mapped read');
-    const strings=[moduleBaseUrl,wire.policy,rpcInterface,'getMappedResults','java.lang.String/2004016611','java.util.HashMap/1797211028','I','Z',query+' LIMIT 1001,0'];
-    const body=['7','0',strings.length,...strings,1,2,3,4,5,5,6,7,7,8,9,0,0,1001,1,''].join('|');
+    const strings=[moduleBaseUrl,wire.policy,rpcInterface,'getMappedResults','java.lang.String/2004016611','java.util.HashMap/1797211028','I','Z',query+` LIMIT ${limit},0`];
+    const body=['7','0',strings.length,...strings,1,2,3,4,5,5,6,7,7,8,9,0,0,limit,1,''].join('|');
     const response=await post({url:moduleBaseUrl+'service/MetaQueryService',headers:wire.headers,body});if(response.status!==200)throw Error('Mapped read failed');
     const data=decodeMappedResponse(response.body);if(data.total!==data.rows.length||data.total>1000)throw Error('Incomplete enrollment list');return data.rows;
   };
@@ -100,7 +100,7 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     if(ids.some(n=>!Number.isSafeInteger(n)||n<=0))throw Error('Invalid household tree');
     await closeDialogs();return [...new Set([target.clientId,...ids])].sort((a,b)=>a-b);
   };
-  const listEnrollments=async({clientId})=>{
+  const openReadContext=async clientId=>{
     id(clientId);await guard();wire=undefined;let captured;
     const listener=request=>{
       if(request.url()===moduleBaseUrl+'service/MetaQueryService'&&request.postData()?.startsWith('7|0|')){
@@ -111,6 +111,9 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     page.on('request',listener);
     try{await openClient(clientId);wire=await captured;}finally{page.off('request',listener);}
     if(!wire?.policy||Object.values(wire.headers).some(v=>!v))throw Error('Fresh enrollment list context unavailable');
+  };
+  const listEnrollments=async({clientId})=>{
+    await openReadContext(clientId);
     const rows=await mapped(`SELECT e.entryExitId AS enrollmentId, e.clientId AS clientId, e.entryDate AS projectStartDate, e.exitDate AS projectExitDate, e.providerId AS enrollmentProvider, e.typeEntryExit.name AS type, e.groupId AS groupId FROM SpEntryExit AS e WHERE e.active = TRUE AND e.client.active = TRUE AND e.clientId = ${clientId} ORDER BY e.entryExitId`);
     const ids=new Set();
     for(const row of rows){
@@ -119,6 +122,18 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
       if(row.groupId!==null){if(typeof row.groupId==='number'&&row.groupId<=0)throw Error('Invalid enrollment group');literal(row.groupId);}
     }
     return {source:'gwt-rpc',tenant,clientId,count:rows.length,values:rows.map(row=>({...row,isActive:true,grouped:row.groupId!==null}))};
+  };
+  const readPicklistOptions=async({clientId,optionIds})=>{
+    id(clientId);if(!Array.isArray(optionIds)||optionIds.length>10000)throw Error('Invalid picklist option IDs');
+    const ids=[...new Set(optionIds.map(id))].sort((a,b)=>a-b),values=[];
+    if(ids.length)await openReadContext(clientId);
+    for(let offset=0;offset<ids.length;offset+=200){
+      const chunk=ids.slice(offset,offset+200);
+      const rows=await mapped(`SELECT v.picklistValueId AS optionId, v.picklistId AS picklistId, v.name AS name, v.code AS code FROM SpPicklistValue AS v WHERE v.picklistValueId IN (${chunk.join(',')}) ORDER BY v.picklistValueId`,200);
+      if(rows.length!==chunk.length||new Set(rows.map(r=>r.optionId)).size!==chunk.length||rows.some(r=>!chunk.includes(r.optionId)||!Number.isSafeInteger(r.picklistId)||r.picklistId<=0||typeof r.name!=='string'||!r.name.trim()||r.code!==null&&typeof r.code!=='string'))throw Error('Incomplete picklist option catalog');
+      values.push(...rows);
+    }
+    return {source:'gwt-rpc',tenant,clientId,count:values.length,values};
   };
   const readEnrollment=async target=>{
     const model=await openTarget(target),householdClientIds=await householdIds(target);
@@ -213,7 +228,7 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     try{await save.click();const result=await Promise.race([captured,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),15000);})]);if(!result)throw Error('Expected mutation was not captured');pending=digest(JSON.stringify({url:result.url,headers:result.headers,body:result.body}));return result;}
     finally{clearTimeout(timer);await page.unroute('**/service/**',handler);await ready();await closeDialogs();}
   };
-  return {connection:resolveUiConnection({tenant,moduleBaseUrl}),readEnrollment,listEnrollments,prepare,async send(request){
+  return {connection:resolveUiConnection({tenant,moduleBaseUrl}),readEnrollment,listEnrollments,readPicklistOptions,prepare,async send(request){
     checkGeneration();const fingerprint=digest(JSON.stringify(request));if(!pending||fingerprint!==pending)throw Error('Only the newly prepared request can be sent once');pending=undefined;return post(request);
   }};
 }

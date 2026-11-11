@@ -29,7 +29,25 @@ The default metadata cache TTL is 60 seconds with 100 entries per client. Config
 
 WellSky requires a client context and known assessment code for these reads. There is no documented global assessment-list or standalone picklist-list endpoint. Mobile option metadata has no effective-date filter, so definitions explicitly identify its options as current even when the generic assessment read is dated. Metadata also does not provide a complete questionnaire branching engine.
 
-Use the raw `assessments.get`, `assessmentsMobile.getAnswers`, and `enrollments.getAssessment` methods for recorded answers. Use `encodeAnswers` and `encodeNewSubassessmentRow` for endpoint-specific encoding. Mobile lookups use option IDs; standalone/enrollment lookups require an explicit `writeLabel` resolver with tenant-verified labels. Raw option names are not assumed to be valid write labels. Some HUD-marked choices require `(HUD)` in the full write label even when metadata `name` omits it. Do not infer this from trailing whitespace or append the suffix to every option. Continue supplying tenant-verified labels until a label resolver has authoritative metadata; recorded `answer_value_text` is useful evidence for the corresponding option. Provider answers are refused for mobile writes because that endpoint can silently discard them. Answer-state code mappings and multi-value serialization are caller-supplied; a refusal is never converted to `No`.
+Use the raw `assessments.get`, `assessmentsMobile.getAnswers`, and `enrollments.getAssessment` methods for recorded answers. Use `encodeAnswers` and `encodeNewSubassessmentRow` for endpoint-specific encoding. Mobile lookups use option IDs; standalone/enrollment lookups require an explicit `writeLabel` resolver with tenant-verified labels. Raw option names are not assumed to be valid write labels. Some HUD-marked choices require `(HUD)` in the full write label even when metadata `name` omits it. Do not infer this from trailing whitespace or append the suffix to every option. Use the catalog resolver below for exact labels without existing answers, or retain an explicitly verified callback; recorded `answer_value_text` also supplies evidence for observed options. Provider answers are refused for mobile writes because that endpoint can silently discard them. Answer-state code mappings and multi-value serialization are caller-supplied; a refusal is never converted to `No`.
+
+## Resolve lookup labels before an answer exists
+
+The browser enrollment session exposes `readPicklistOptions({clientId, optionIds})`. It reads the current GWT picklist catalog and returns complete, counted rows with `optionId`, `picklistId`, `code`, and the exact full `name`. It needs an authenticated session and client context, but no existing enrollment or answer. Only explicit positive option IDs are queried, in batches of 200; missing, duplicated or malformed results stop discovery.
+
+```ts
+import {flattenQuestions, createCatalogWriteLabelResolver} from '@choiceapps/communityservices-sdk';
+const definition = await api.assessments.getDefinition({clientId, assessmentCode});
+const optionIds = [...new Set(flattenQuestions(definition.questions)
+  .filter(({question}) => question.questionType === 'lookup')
+  .flatMap(({question}) => question.options.map(option => option.id)))];
+const catalog = await session.enrollmentSession.readPicklistOptions({clientId, optionIds});
+const writeLabel = createCatalogWriteLabelResolver(definition, catalog);
+```
+
+The resolver matches option ID, picklist ID and code, preserves the full catalog name, and permits only options already allowed by the question definition. HUD and non-HUD choices have distinct IDs. It never appends a suffix, guesses from whitespace, or broadens the question's allowed list. Missing identity evidence or a tenant mismatch throws before encoding. The immutable resolver returns `undefined` if called with changed option metadata.
+
+`createEnrollmentWorkflow` uses this catalog automatically when its `enrollmentSession` has `readPicklistOptions` and `writeLabel` is omitted. This covers standard entry/interim/exit batches, mandatory carry-forward and `correctEntry`. Explicit callbacks take precedence and skip automatic catalog reads. Legacy custom sessions without this reader still need a callback. Raw REST clients do not acquire UI access implicitly. See [the typed example](../examples/catalog-write-labels.mts) and [read-only evidence](vendor-issues/lookup-write-labels.md).
 
 ## Resolve exact lookup write labels from readback
 

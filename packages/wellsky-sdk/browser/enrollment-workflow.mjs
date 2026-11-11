@@ -6,7 +6,7 @@ import {createEntryRowRegistrar} from './entry-row-registration.mjs';
 import {createHouseholdEnrollmentDiscovery} from './household-enrollment-discovery.mjs';
 import {workflowErrorCode} from './workflow-error-codes.mjs';
 import {createHash} from 'node:crypto';
-import {readProgramCatalog,encodeAnswers,encodeNewSubassessmentRow,toItems,parseRestInstant} from '../dist/esm/index.js';
+import {readProgramCatalog,flattenQuestions,createCatalogWriteLabelResolver,encodeAnswers,encodeNewSubassessmentRow,toItems,parseRestInstant} from '../dist/esm/index.js';
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const positive=v=>Number.isSafeInteger(v)&&v>0;
@@ -128,7 +128,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   }
  };
  if(typeof discovery?.getProviderAssessments!=='function'||typeof helpers?.createInterimUpdate!=='function'||!store)fail('REST API, discovery, enrollment helpers and durable store required');
- if(!['mobile','standard'].includes(yesNoWrites)||yesNoWrites==='standard'&&(typeof writeLabel!=='function'||typeof api.assessments?.create!=='function'))fail('yesNoWrites must be mobile, or standard with writeLabel and assessments.create');
+ if(!['mobile','standard'].includes(yesNoWrites)||yesNoWrites==='standard'&&(typeof writeLabel!=='function'&&typeof enrollmentSession?.readPicklistOptions!=='function'||typeof api.assessments?.create!=='function'))fail('yesNoWrites must be mobile, or standard with writeLabel and assessments.create');
  if(!object(assessmentLocations))fail('assessment locations must be a map by Entry/Exit type');
  for(const [type,locations]of Object.entries(assessmentLocations)){
   if(!entryExitTypes.includes(type))fail('unsupported Entry/Exit type in assessment locations');
@@ -149,7 +149,14 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(definition.tenant!==api.tenant||definition.assessmentCode!==assessment.code||definition.unresolvedPicklists.length)fail('assessment metadata incomplete');
    resolved[phase]={assessment,definition};
   }
-  return {provider:providers[0],...resolved};
+  let picklistOptions;
+  if(writeLabel===undefined&&typeof enrollmentSession?.readPicklistOptions==='function'){
+   const optionIds=[...new Set(Object.values(resolved).flatMap(({definition})=>flattenQuestions(definition.questions).filter(({question})=>question.questionType==='lookup').flatMap(({question})=>question.options.map(o=>o.id))))];
+   picklistOptions=await enrollmentSession.readPicklistOptions({clientId:input.clientId,optionIds});
+   if(picklistOptions?.clientId!==input.clientId)fail('picklist catalog client mismatch',{code:'PICKLIST_CATALOG_CONTEXT_MISMATCH'});
+   for(const {definition}of Object.values(resolved))createCatalogWriteLabelResolver(definition,picklistOptions);
+  }
+  return {provider:providers[0],...resolved,...(picklistOptions?{picklistOptions}:{})};
  };
  const scope=clientId=>JSON.stringify([tenantScope,'enrollment-workflow',clientId]);
  const reservationScope=clientId=>JSON.stringify([tenantScope,'household-workflow-reservation',clientId]);
@@ -210,7 +217,8 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const definition=discovered[kind].definition,code=definition.assessmentCode,at=kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate);
    const exitSchemaHash=kind==='exit'?hash({assessment:discovered.exit.assessment,questions:definition.questions}):undefined;
    if(record&&kind==='exit'&&record.exitSchemaHash!==exitSchemaHash)fail('exit assessment configuration changed');
-   const plan=compile(definition,input.assessment,{yesNoWrites,writeLabel});
+   const operationWriteLabel=writeLabel??(discovered.picklistOptions?createCatalogWriteLabelResolver(definition,discovered.picklistOptions):undefined);
+   const plan=compile(definition,input.assessment,{yesNoWrites,writeLabel:operationWriteLabel});
    const carriesBirthDate=plan.carry.includes('SVPPROFDOB'),hasBirthDate=plan.dateOfBirth!==undefined||carriesBirthDate;
    let carriedBirthDate;
    if(hasBirthDate){
@@ -266,7 +274,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const recorded=initial.find(q=>q.virt_field_name===m.virt_field_name)?.answer_value;
     if(m.carry){
      const question=definition.questions.find(q=>q.fieldName===m.virt_field_name),options=question.options.filter(o=>String(o.id)===String(recorded));
-     const label=options.length===1?writeLabel(question,options[0]):undefined;
+     const label=options.length===1?operationWriteLabel?.(question,options[0]):undefined;
      if(!label)fail(`carried mandatory answer ${m.virt_field_name} has no verified write label`,{code:'LOOKUP_WRITE_LABEL_UNAVAILABLE',fields:[m.virt_field_name]});
      if(m.virt_field_name==='HUD_RELATIONTOHOH')checkHeadAnswer(recorded);
      return {question_id:m.question_id,question_type:m.question_type,virt_field_name:m.virt_field_name,answer_value:label,expected:String(recorded)};

@@ -119,3 +119,26 @@ test('GWT enrollment list refuses unavailable context, count truncation and malf
   const f=listFixture(faults);await assert.rejects(f.read());assert.equal(f.listeners.size,0);
  }
 });
+
+function catalogFixture(transform=rows=>rows){
+ const calls=[],listeners=new Set(),headers={'content-type':'text/x-gwt-rpc','x-gwt-module-base':base,'x-gwt-permutation':'FRESH_PERMUTATION'};
+ const request={url:()=>base+'service/MetaQueryService',postData:()=>`7|0|9|${base}|FRESH_POLICY|`,allHeaders:async()=>headers};
+ const page={setDefaultTimeout(){},url:()=>base+'index.html',waitForFunction:async()=>{},locator:()=>({count:async()=>0}),getByText:()=>({isVisible:async()=>true}),on:(_,fn)=>listeners.add(fn),off:(_,fn)=>listeners.delete(fn),getByRole:()=>({click:async()=>{for(const listener of listeners)listener(request);}}),evaluate:async(_,request)=>{
+  calls.push(request);assert.match(request.body,/SELECT v.picklistValueId AS optionId/);assert.match(request.body,/LIMIT 200,0/);assert.match(request.body,/FRESH_POLICY/);
+  const ids=request.body.match(/v.picklistValueId IN \(([^)]+)\)/)[1].split(',').map(Number);
+  return {status:200,body:wire(transform(ids.map(optionId=>({optionId,picklistId:7,code:`OPT_${optionId}`,name:optionId===1?'Yes (HUD)':'No'}))))};
+ }};
+ return {calls,listeners,reader:createPlaywrightGwtSession({page,tenant:testTenant,moduleBaseUrl:base})};
+}
+test('picklist catalog batches explicit IDs and reads full labels without an entry or saved answer',async()=>{
+ const f=catalogFixture(),ids=Array.from({length:405},(_,i)=>i+1),result=await f.reader.readPicklistOptions({clientId:597,optionIds:[...ids,1]});
+ assert.equal(result.count,405);assert.equal(result.values[0].name,'Yes (HUD)');assert.equal(result.tenant,testTenant);assert.equal(result.clientId,597);assert.equal(f.calls.length,3);assert.equal(f.listeners.size,0);
+ assert.ok(f.calls.every(c=>!c.body.includes('SpEntryExit')&&!c.body.includes('AssessmentAnswer')));
+});
+test('picklist catalog refuses incomplete identities and invalid IDs',async()=>{
+ for(const transform of [rows=>rows.slice(1),rows=>[rows[0],rows[0]],rows=>rows.map(r=>({...r,picklistId:null})),rows=>rows.map(r=>({...r,name:''})),rows=>rows.map(r=>({...r,optionId:999}))]){
+  const f=catalogFixture(transform);await assert.rejects(f.reader.readPicklistOptions({clientId:597,optionIds:[1,2]}));assert.equal(f.listeners.size,0);
+ }
+ const f=catalogFixture();for(const optionIds of [[0],['1'],[1.5],Array(10001).fill(1)])await assert.rejects(f.reader.readPicklistOptions({clientId:597,optionIds}));assert.equal(f.calls.length,0);
+ assert.equal((await f.reader.readPicklistOptions({clientId:597,optionIds:[]})).count,0);
+});

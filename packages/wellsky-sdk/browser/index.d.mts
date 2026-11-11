@@ -1,6 +1,6 @@
 import type {UiConnection,UiConnectionOptions} from './connection.mjs';
 import type {Browser, BrowserContext, BrowserType, Page} from 'playwright-core';
-import type {GwtEnrollmentExit,GwtEnrollmentHelpers,GwtEnrollmentSession,GwtEnrollmentSnapshot,GwtMutationStore} from '../dist/esm/index.js';
+import type {PicklistCatalogSnapshot,GwtEnrollmentExit,GwtEnrollmentHelpers,GwtEnrollmentSession,GwtEnrollmentSnapshot,GwtMutationStore} from '../dist/esm/index.js';
 export interface LoginOptions extends UiConnectionOptions {
   chromium: BrowserType;
   envFile?: string;
@@ -29,12 +29,15 @@ export interface EnrollmentListSnapshot {
 }
 export interface EnrollmentReader {
   readonly connection?:UiConnection;
+  /** Exact full names for explicit REST option IDs; does not read existing answers. */
+  readPicklistOptions?(target:{clientId:number;optionIds:readonly number[]}):Promise<PicklistCatalogSnapshot>;
   readEnrollment(target:{clientId:number;enrollmentId:number}):Promise<PlaywrightEnrollmentSnapshot>;
   /** Built-in sessions supply this complete, counted list, including exited entries.
    * Legacy custom readers without it retain REST list behavior. */
   listEnrollments?(target:{clientId:number}):Promise<EnrollmentListSnapshot>;
 }
 export interface EnrollmentCatalogReader extends EnrollmentReader {
+ readPicklistOptions(target:{clientId:number;optionIds:readonly number[]}):Promise<PicklistCatalogSnapshot>;
  listEnrollments(target:{clientId:number}):Promise<EnrollmentListSnapshot>;
 }
 export function openUiSession(options:LoginOptions):Promise<UiSession>;
