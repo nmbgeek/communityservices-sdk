@@ -8,13 +8,14 @@ Only the package export paths below are supported import entry points. Declarati
 
 Import from `@choiceapps/communityservices-sdk`, `@choiceapps/communityservices-sdk/v3`, or `@choiceapps/communityservices-sdk/v2`. The root selects V3 and also exports the testing helpers. Each version supplies its own generated HTTP models and fixed version header.
 
-Runtime exports at the root: `AmbiguousCommitError`, `AssessmentMetadata`, `AuthError`, `CooldownError`, `DefinitionDriftError`, `FakeControl`, `FakeWellSkyClient`, `GwtEnrollmentConflictError`, `GwtEnrollmentHelpers`, `SubassessmentEditor`, `TenantMismatchError`, `ThrottledError`, `UnknownPicklistValueError`, `UpstreamError`, `ValidationError`, `WellSkyClient`, `WellSkyError`, `apiVersion`, `buildAssessmentDefinition`, `compareDefinition`, `createFakeWellSkyClient`, `createInMemoryGwtMutationStore`, `createWellSkyClient`, `encodeAnswers`, `encodeNewSubassessmentRow`, `flattenQuestions`, `mapBulk`, `operationRoutes`, `parseRestInstant`, `readEnrollmentVerifications`, `readOutcome`, `readProgramCatalog`, `resolvePicklistOption`, `semanticHash`, `specSha256`, `toItems`, `verifyWrite`.
+Runtime exports at the root: `MobileAnswerPreflightError`, `writeMobileAnswersChecked`, `createReadBackWriteLabelResolver`, `AmbiguousCommitError`, `AssessmentMetadata`, `AuthError`, `CooldownError`, `DefinitionDriftError`, `FakeControl`, `FakeWellSkyClient`, `GwtEnrollmentConflictError`, `GwtEnrollmentHelpers`, `SubassessmentEditor`, `TenantMismatchError`, `ThrottledError`, `UnknownPicklistValueError`, `UpstreamError`, `ValidationError`, `WellSkyClient`, `WellSkyError`, `apiVersion`, `buildAssessmentDefinition`, `compareDefinition`, `createFakeWellSkyClient`, `createInMemoryGwtMutationStore`, `createWellSkyClient`, `encodeAnswers`, `encodeNewSubassessmentRow`, `flattenQuestions`, `mapBulk`, `operationRoutes`, `parseRestInstant`, `readEnrollmentVerifications`, `readOutcome`, `readProgramCatalog`, `resolvePicklistOption`, `semanticHash`, `specSha256`, `toItems`, `verifyWrite`.
 
 | Contract | Declaration | Guide |
 | --- | --- | --- |
 | HTTP clients and generated models | [V3](../dist/esm/generated/v3.d.ts), [V2](../dist/esm/generated/v2.d.ts) | [REST](rest-client.md), [API table](../API.md) |
 | Authentication, transport, responses and errors | [Runtime](../dist/esm/runtime.d.ts) | [Configuration](configuration.md), [recovery](troubleshooting.md) |
 | Metadata and picklists | [Metadata](../dist/esm/metadata.d.ts) | [Assessments](assessments.md) |
+| Checked mobile inserts and exact lookup labels | [Preflight](../dist/esm/mobile-preflight.d.ts), [labels](../dist/esm/write-labels.d.ts) | [Assessments](assessments.md) |
 | Answer encoding | [Encoding](../dist/esm/encoding.d.ts) | [Dates and answers](dates-and-answers.md) |
 | Write verification | [Verification](../dist/esm/verification.d.ts) | [REST](rest-client.md) |
 | Program catalog | [Program discovery](../dist/esm/program-discovery.d.ts) | [Enrollments](enrollments.md) |
@@ -36,7 +37,7 @@ Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`
 | Profile fields and Sex | [Client profile](../browser/client-profile.d.mts) | `read`, `update` |
 | Calendar DOB | [Birth dates](../browser/date-of-birth.d.mts) | `read`, `validate`, `verify`, `update` |
 | Provider assessment defaults | [Discovery](../browser/program-discovery.d.mts) | `listAssessments`, `getProviderAssessments` |
-| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, `correctEntry`, `resolveEntryCorrection`, `adoptEnrollment`, `adoptHouseholdEnrollment`, member additions, interim, `exitEnrollment`, `exitHousehold`, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
+| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, `correctEntry`, `resolveEntryCorrection`, `adoptEnrollment`, `adoptHouseholdEnrollment`, `discoverHouseholdEnrollment`, `registerEntryRows`, member additions, interim, `exitEnrollment`, `exitHousehold`, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
 | Entry-date and exit UI ports | [Member entry](../browser/member-entry-date.d.mts), [exit](../browser/household-exit.d.mts) | Fresh reads and targeted completion |
 | Services and recovery diagnostics | [Service recording](../browser/service-recording.d.mts) | `record`, `recordBulk`, Funding Sources, `RecoveryDiagnostic` |
 | SSVF conditional rules | [SSVF types](../browser/ssvf-rules.d.mts) | [Field rules](../SSVF.md) and dated option snapshots |

@@ -68,6 +68,25 @@ test('manual household adoption rejects an incomplete cohort and orphaned head c
   await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'manual',householdId:30,headClientId:1,members:orphaned?members:members.slice(0,1)}));assert.equal(f.journal.size,0);
  }
 });
+test('household discovery and adoption from a head target verify a unique household without writes',async()=>{
+ const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.journal.clear();f.api.households.listForClient=async()=>({count:1,values:[structuredClone(f.household)]});const before=structuredClone(f.counts);
+ const target={headClientId:1,headEnrollmentId:50},found=await f.workflow().discoverHouseholdEnrollment(target);assert.equal(found.householdId,30);assert.equal(found.householdSource,'verified-membership');assert.deepEqual(found.members,[{clientId:1,enrollmentId:50},{clientId:2,enrollmentId:52}]);
+ const adopted=await f.workflow().adoptHouseholdEnrollment({key:'from-head',...target});assert.equal(adopted.householdId,30);assert.equal(adopted.members.length,2);assert.deepEqual(f.counts,before);
+ assert.equal((await f.workflow().adoptHouseholdEnrollment({key:'from-head',...target})).outcome,'already-present');assert.deepEqual(f.counts,before);
+});
+test('household discovery refuses ambiguous, incomplete and date-incompatible membership matches',async()=>{
+ for(const mode of ['ambiguous','incomplete','dates']){
+  const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.journal.clear();const h=structuredClone(f.household);
+  if(mode==='dates')h.clients.find(c=>c.clientId===2).dateJoined='2026-10-25T16:00:00Z';
+  f.api.households.listForClient=async()=>mode==='ambiguous'?{count:2,values:[h,{...h,householdId:31}]}:mode==='incomplete'?{count:2,values:[]}:{count:1,values:[h]};
+  const code=mode==='ambiguous'?'HOUSEHOLD_DISCOVERY_AMBIGUOUS':mode==='incomplete'?'HOUSEHOLD_DISCOVERY_LIST_INCOMPLETE':'HOUSEHOLD_DISCOVERY_NOT_FOUND';
+  await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'from-head',headClientId:1,headEnrollmentId:50}),e=>e.code===code&&e.committed===false);assert.equal(f.journal.size,0);
+ }
+});
+test('adoption head mismatch has a stable code and a non-commit marker',async()=>{
+ const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.journal.clear();
+ await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'manual',householdId:30,headClientId:2,members:[{clientId:1,enrollmentId:50},{clientId:2,enrollmentId:52}]}),e=>e.code==='ADOPTION_HOUSEHOLD_HEAD_MISMATCH'&&e.committed===false);
+});
 test('adopted household keys support household interims and per-member scalar corrections',async()=>{
  for(const action of ['interim','correction']){
   const f=fixture();await f.workflow().createHouseholdEnrollment(entryInput());f.journal.clear();

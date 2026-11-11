@@ -66,6 +66,9 @@ void enrollmentWorkflow.resolveEntryCorrection({key:'correction',enrollmentKey:'
 void enrollmentWorkflow.adoptEnrollment({key:'manual-entry',clientId:1,enrollmentId:2});
 void enrollmentWorkflow.adoptHouseholdEnrollment({key:'manual-household',householdId:3,headClientId:1,members:[{clientId:1,enrollmentId:2},{clientId:4,enrollmentId:5}]});
 void session.enrollmentSession.listEnrollments({clientId:1});
+void enrollmentWorkflow.discoverHouseholdEnrollment({headClientId:1,headEnrollmentId:2});
+void enrollmentWorkflow.adoptHouseholdEnrollment({key:'head-only',headClientId:1,headEnrollmentId:2});
+void enrollmentWorkflow.registerEntryRows({key:'rows',enrollmentKey:'manual-entry',clientId:1,rows:[{key:'existing-row',parentField:'ROWS',recordsetId:9}]});
 // @ts-expect-error An individual exit needs explicit destination and reason.
 void enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',assessment:{}});
 const birthSnapshot:BirthDateSnapshot=await birthDates.read({clientId:1,assessmentCode:'ENTRY'});

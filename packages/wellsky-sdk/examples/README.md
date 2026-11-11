@@ -15,6 +15,8 @@ Every file here ships with the package and imports the public `@choiceapps/commu
 | [program-discovery.ts](program-discovery.ts) | Program and VA-entry assessment discovery | Exported function; authenticated page required |
 | [enrollment-workflow.mts](enrollment-workflow.mts) | Single entry and interim assessment plans | Exported function; caller supplies plans and dependencies |
 | [individual-exit-workflow.mts](individual-exit-workflow.mts) | Standalone program enrollment exit and assessment | Verified entry key, enrollment reader, exit UI port and durable store required |
+| [checked-assessment-writes.mts](checked-assessment-writes.mts) | Exact readback lookup labels and checked mobile scalar inserts | Unobserved labels remain unresolved; preflight does not make writes atomic |
+| [enrollment-discovery-and-correction.mts](enrollment-discovery-and-correction.mts) | Discover/adopt from the head and bind existing correction rows | Explicit row IDs and unique verified household membership required |
 | [entry-correction-workflow.mts](entry-correction-workflow.mts) | Same-date scalar clears and existing row edits | Original entry/row keys, verified lookup labels and durable store required |
 | [existing-enrollment-exits.mts](existing-enrollment-exits.mts) | Adopt manual individual or household entries, then exit | Explicit enrollment identities and original household head required |
 | [household-enrollment-workflow.mts](household-enrollment-workflow.mts) | Per-member enrollment and review | Existing household and per-member answer plans required |

@@ -31,6 +31,22 @@ WellSky requires a client context and known assessment code for these reads. The
 
 Use the raw `assessments.get`, `assessmentsMobile.getAnswers`, and `enrollments.getAssessment` methods for recorded answers. Use `encodeAnswers` and `encodeNewSubassessmentRow` for endpoint-specific encoding. Mobile lookups use option IDs; standalone/enrollment lookups require an explicit `writeLabel` resolver with tenant-verified labels. Raw option names are not assumed to be valid write labels. Some HUD-marked choices require `(HUD)` in the full write label even when metadata `name` omits it. Do not infer this from trailing whitespace or append the suffix to every option. Continue supplying tenant-verified labels until a label resolver has authoritative metadata; recorded `answer_value_text` is useful evidence for the corresponding option. Provider answers are refused for mobile writes because that endpoint can silently discard them. Answer-state code mappings and multi-value serialization are caller-supplied; a refusal is never converted to `No`.
 
+## Resolve exact lookup write labels from readback
+
+`createReadBackWriteLabelResolver` preserves the exact `answer_value_text` for an observed question/option pair, including a HUD suffix and whitespace. It does not infer labels from trailing spaces or `hudVisibility`: retained readbacks include suffixed and unsuffixed labels with the same visibility flag.
+
+```ts
+import {createReadBackWriteLabelResolver} from '@choiceapps/communityservices-sdk';
+const writeLabel = createReadBackWriteLabelResolver(definition, [
+  {tenant: api.tenant, response: recordedAnswers},
+]);
+// Supply writeLabel to encodeAnswers or createEnrollmentWorkflow.
+```
+
+Supply authorized assessment reads from the definition's tenant. The helper matches question ID, field name and option ID, rejects conflicting labels and mixed tenants, and returns an immutable resolver tagged with its tenant. The enrollment workflow checks that tenant. The resolver returns `undefined` for unobserved or changed options, so normal encoding refuses them. Refresh the definition and observations after metadata changes.
+
+This is an evidence-backed resolver, not a complete label catalog. Unobserved options still need an authoritative readback or another independently verified resolver. Do not write answers merely to discover labels. See [the typed example](../examples/checked-assessment-writes.mts).
+
 ## Yes/no answer acceptance
 
 `encodeAnswers` encodes a `yes_no` value of `true` or `"Yes"` as `"Yes"`, and `false` or `"No"` as `"No"`. Which endpoint persists that value matters more than the encoding.
@@ -53,6 +69,21 @@ The enrollment workflow writes yes/no answers through the mobile batch by defaul
 An entry assessment and a standalone form can reference the same stored question. Changing `assessmentCode` does not make a second answer at the same client/question/effective instant available for a mobile insert. The integrator reported this for `HPTARGETINGSCORETOTAL` on an entry and form 1002: when the stored value differed, the mobile batch was rejected. Compare question identifiers and effective dates, not only form names.
 
 Read the existing answer before planning a mobile scalar insert. If it already exists at that instant with another value, use a supported standard correction/update path after resolving the original operation; do not move its timestamp to evade the collision. Raw `assessmentsMobile.addAnswer` remains a raw write and performs no implicit read or cross-form collision check. Never switch endpoints to retry an uncertain batch.
+
+Use `writeMobileAnswersChecked(api, request)` for an explicit scalar collision check before a raw mobile batch. It accepts the ordinary mobile request with a required timezone-qualified, whole-second `query.dateEffective`. It reads the supplied instrument one second after that instant so yes/no rows are visible, then matches question identity and effective date. A row at the target instant blocks the entire batch even when its value is identical or empty. Missing, invalid or newer readback evidence also blocks the write. Older answers allow the insert.
+
+```ts
+import {writeMobileAnswersChecked, MobileAnswerPreflightError} from '@choiceapps/communityservices-sdk';
+await writeMobileAnswersChecked(api, {
+  path: {clientId, assessmentCode},
+  query: {dateEffective: originalEffectiveInstant},
+  body: encodedMobileAnswers,
+});
+```
+
+`MobileAnswerPreflightError` has a stable `code`, affected `fields`, and `committed: false`. A collision uses `MOBILE_ANSWER_EXISTS`; unavailable evidence uses `MOBILE_PREFLIGHT_UNAVAILABLE`. The helper checks scalars, including questions shared across instruments, but does not detect duplicate subassessment rows. It makes one write after a successful preflight and does not retry or journal it. An error from that write retains its original type and possible uncertain outcome. Reads and writes are not atomic against other users. Pass the original instant; the SDK transport applies any configured mobile date correction.
+
+New enrollment workflow plans also check scalar collisions before creating an enrollment or sending a mobile batch. Existing pending journal operations retain their reconciliation behavior.
 
 ## Race and ethnicity combinations
 

@@ -148,7 +148,7 @@ const corrected = await workflow.correctEntry({
 });
 ```
 
-`answers` uses the ordinary answer and option selectors. `clear` explicitly removes a recorded value; an omitted field stays unchanged. Yes/no fields cannot appear in `clear`: the SDK throws `UNSUPPORTED_YES_NO_CLEAR`, with the affected `fields`, before any correction write or new journal record. Use `{value: false}` to answer `No`; it does not mean blank. No alternative yes/no blanking route has been verified. Do not use `notApplicable` to clear an old answer. Every row key must identify an existing row returned by the original entry operation. The correction never creates a second row, deletes a row, or changes the enrollment date.
+`answers` uses the ordinary answer and option selectors. `clear` explicitly removes a recorded value; an omitted field stays unchanged. Yes/no fields cannot appear in `clear`: the SDK throws `UNSUPPORTED_YES_NO_CLEAR`, with the affected `fields`, before any correction write or new journal record. Use `{value: false}` to answer `No`; it does not mean blank. No alternative yes/no blanking route has been verified. Do not use `notApplicable` to clear an old answer. Every row key must identify an existing row returned by the original entry operation or explicitly bound with `registerEntryRows`. The correction never creates a second row, deletes a row, or changes the enrollment date.
 
 Scalars use the standard assessment endpoint, which supports same-date updates. The batch includes every mandatory scalar, preserving its current value unless the patch explicitly answers or clears it. Missing mandatory values require an explicit answer, or an explicit clear for a supported non-yes/no type; lookup values require verified write labels. Readback checks one second after the original instant so stored yes/no values are visible.
 
@@ -176,7 +176,7 @@ await workflow.resolveEntryCorrection({
 
 The SDK verifies the complete saved pre-write state before and after confirmation and rechecks enrollment context. A partial application, changed state or unavailable read prevents resolution. Successful resolution marks the correction `rejected` while retaining its original intent, attempted steps, diagnostics and evidence reference. It makes no SDK record writes to WellSky. Repeating the same resolution returns `already-rejected`; submitting that correction key again throws `ENTRY_CORRECTION_REJECTED`. Use a new correction key for the corrected intent only after resolution. A verified successful correction cannot be rejected.
 
-This also supports pending 0.5.0 journals, including those without failure metadata, when the required independent evidence exists. A new validation failure that occurs before journaling needs no resolution.
+This also supports pending 0.5.0 journals, including those without failure metadata, when the required independent evidence exists. For these journals the callback can receive only a step name and state, with no failure kind or status. The caller must retain its own original failure evidence; the SDK cannot reconstruct it and must not resend the write to obtain diagnostics. A new validation failure that occurs before journaling needs no resolution.
 
 ## Household enrollment and interim assessments
 
@@ -232,7 +232,7 @@ const detail = await session.enrollmentSession.readEnrollment({
 // detail.members contains the complete linked clientId/enrollmentId pairs.
 ```
 
-Use the session returned by `openEnrollmentSession`. Lists include open and exited entries, validate complete counts, and refuse more than 1,000 records. The detail read currently exposes `householdClientIds`, not `householdId`; these client IDs and the enrollment's group are not interchangeable with a household ID. Household adoption still requires an explicitly verified household ID.
+Use the session returned by `openEnrollmentSession`. Lists include open and exited entries, validate complete counts, and refuse more than 1,000 records. List rows and details include `groupId` and `grouped`. The flag describes a stored group link, including a group with one participant; it is not a member count and requires no per-row detail reads. These fields are required on managed catalog rows and optional on custom detail-reader contracts for compatibility. `groupId` is never a household ID. For a verified household match from a head enrollment, use `discoverHouseholdEnrollment` below.
 
 ## Individual enrollment exits
 
@@ -264,7 +264,41 @@ Use `adoptEnrollment({key, clientId, enrollmentId})` for a standalone enrollment
 
 Adoption writes only to the local durable journal. It does not create, attach, exit or modify an HMIS record. Later entrants retain their own original entry dates. An enrollment already tracked under another entry key is rejected; use its existing key. Retry an interrupted adoption with the same inputs and store.
 
-After standalone adoption, its key can be used as `enrollmentKey` for `createInterim`, scalar-only `correctEntry`, or `exitEnrollment`. After household adoption, the group key works with `createHouseholdInterim` and `exitHousehold`; use the returned member's `key` for that person's scalar-only `correctEntry`. Correction still requires an open entry without reviews or exits. Do not use an all-not-applicable `createEnrollment` call merely to link an existing entry: it can create an enrollment when no match exists. Exit assessment plans and normal household head rules still apply. Adoption records existing enrollment identities, not historical subassessment row-key mappings, so its returned `recordsetIds` is empty. It cannot identify rows for `correctEntry` by a new invented key. See [manual-entry exit examples](../examples/existing-enrollment-exits.mts).
+After standalone adoption, its key can be used as `enrollmentKey` for `createInterim`, scalar-only `correctEntry`, or `exitEnrollment`. After household adoption, the group key works with `createHouseholdInterim` and `exitHousehold`; use the returned member's `key` for that person's scalar-only `correctEntry`. Correction still requires an open entry without reviews or exits. Do not use an all-not-applicable `createEnrollment` call merely to link an existing entry: it can create an enrollment when no match exists. Exit assessment plans and normal household head rules still apply. Adoption initially returns empty `recordsetIds`. Use `registerEntryRows` below to bind verified existing recordsets before row corrections; a new invented key alone cannot identify a historical row. See [manual-entry exit examples](../examples/existing-enrollment-exits.mts).
+
+### Discover a household from its head enrollment
+
+```ts
+const discovered = await workflow.discoverHouseholdEnrollment({
+  headClientId, headEnrollmentId,
+});
+// discovered: householdId, householdSource, providerId, type, members
+const adopted = await workflow.adoptHouseholdEnrollment({
+  key: sourceEnrollmentKey, headClientId, headEnrollmentId,
+});
+```
+
+Discovery reads the linked enrollment cohort through GWT and matches it against complete current household membership reads. It requires one household containing the cohort, the same head, and membership dates covering each entry. It verifies that household again before returning `householdSource: 'verified-membership'`. This is a verified membership match, not a native historical household pointer on the enrollment. Zero matches, multiple matches, incomplete reads or changed relationships fail without adopting. Historical households that no longer match require the existing explicit adoption inputs and their validation. No record is written to WellSky during discovery or adoption.
+
+### Register existing entry rows
+
+```ts
+await workflow.registerEntryRows({
+  key: sourceRegistrationKey,
+  enrollmentKey: adoptedEntryKey,
+  clientId,
+  rows: [{key: 'entry-ce', parentField, recordsetId: existingRecordsetId}],
+});
+// correctEntry can now reference key: 'entry-ce' with the same parentField.
+```
+
+Select explicit recordset IDs from authorized assessment reads. Registration verifies the enrollment, question definition, and each row's presence in both entry-time and current reads. It stores immutable key/parent/recordset bindings in the local journal and makes no WellSky record writes. Same-key repeats return `already-present`; duplicate aliases, absent rows, rebinding, and pending operations are refused. Native entry row keys already work without registration. For household adoption, use each returned member's entry `key` and register that member's rows separately. Registration does not establish who originally created a row or make later edits eligible: `correctEntry` still enforces open-entry and no-review rules. See [the typed example](../examples/enrollment-discovery-and-correction.mts).
+
+### Classify workflow failures
+
+`EnrollmentWorkflowError` exposes a stable `code`, `operation`, and `committed`. Classify by code instead of message text. Pre-write validation, discovery and adoption failures report `committed: false`. Any attempted write, relevant prior attempt, or unreadable prior outcome remains `'unknown'`. The marker describes WellSky record writes for that operation, not local journal changes. `cause` preserves the original error where available.
+
+A failed `resolveEntryCorrection` can have `committed: false` because resolution itself writes no WellSky records, while `originalCommitted: 'unknown'` describes the original correction. Never use a resolution error's marker to infer non-application of the original write. See [error codes and recovery](troubleshooting.md#workflow-error-codes).
 
 ## Household exits
 

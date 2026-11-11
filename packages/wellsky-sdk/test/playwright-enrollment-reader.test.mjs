@@ -85,7 +85,7 @@ test('enrollment reader rejects incomplete or malformed exit metadata',async()=>
 
 function listFixture(faults={}){
  const calls=[],listeners=new Set(),events=[];
- const row={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',projectExitDate:null,enrollmentProvider:16951,type:'HUD'};
+ const row={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',projectExitDate:null,enrollmentProvider:16951,type:'HUD',groupId:null};
  const request={url:()=>base+'service/MetaQueryService',postData:()=>`7|0|9|${base}|FRESH_POLICY|`,allHeaders:async()=>({'content-type':'text/x-gwt-rpc','x-gwt-module-base':base,'x-gwt-permutation':'FRESH_PERMUTATION'})};
  const page={
   setDefaultTimeout(){},url:()=>faults.wrongTenant?base.replace(testTenant,'wrong')+'index.html':base+'index.html#loadClient;clientId=597',waitForFunction:async()=>{},
@@ -101,12 +101,17 @@ function listFixture(faults={}){
 }
 test('GWT enrollment list reads open and exited entries without needing an existing target ID',async()=>{
  const f=listFixture(),old={...f.row,enrollmentId:694,projectExitDate:'2026-10-20T16:00:00.000Z'},g=listFixture({rows:[old,f.row]});
- const result=await g.read();assert.deepEqual(result,{source:'gwt-rpc',tenant:testTenant,clientId:597,count:2,values:[old,f.row].map(r=>({...r,isActive:true}))});
+ const result=await g.read();assert.deepEqual(result,{source:'gwt-rpc',tenant:testTenant,clientId:597,count:2,values:[old,f.row].map(r=>({...r,isActive:true,grouped:false}))});
  assert.deepEqual(g.events,['Summary','Entry / Exit']);assert.equal(g.listeners.size,0);assert.equal(g.calls.length,1);
  assert.match(g.calls[0].body,/e.clientId = 597 ORDER BY e.entryExitId LIMIT 1001,0/);assert.match(g.calls[0].body,/FRESH_POLICY/);assert.ok(!g.calls[0].body.includes('|getEntryExit|'));
 });
 test('GWT enrollment list confirms counted absence without a creation or edit popup',async()=>{
  const f=listFixture({rows:[]});assert.deepEqual((await f.read()).values,[]);assert.equal(f.calls.length,1);assert.deepEqual(f.events,['Summary','Entry / Exit']);
+});
+test('GWT list exposes group pointers without additional per-enrollment reads',async()=>{
+ const row=listFixture().row,f=listFixture({rows:[{...row,groupId:'group-12'},{...row,enrollmentId:696,groupId:55},{...row,enrollmentId:697}]});
+ const result=await f.read();assert.deepEqual(result.values.map(r=>[r.grouped,r.groupId]),[[true,'group-12'],[true,55],[false,null]]);assert.equal(f.calls.length,1);
+ for(const groupId of [undefined,{},'invalid group'])await assert.rejects(listFixture({rows:[{...row,groupId}]}).read());
 });
 test('GWT enrollment list refuses unavailable context, count truncation and malformed identities',async()=>{
  const row=listFixture().row;

@@ -46,6 +46,23 @@ Successful adoption of an existing record also needs its journal. Retain it even
 
 Not every browser helper error is a `WellSkyError`; some validation/UI failures are ordinary `Error` objects. `verifyWrite` returns a discriminated result rather than using a thrown error as its success contract. Its `unverified` result may already be committed.
 
+## Workflow error codes
+
+Enrollment workflow errors expose stable `code` values. Common actionable codes include:
+
+| Code | Meaning |
+| --- | --- |
+| `ADOPTION_HOUSEHOLD_HEAD_MISMATCH` | The supplied head does not match the verified enrollment cohort |
+| `INDEPENDENT_CONFIRMATION_REQUIRED` | Resolution lacks independent confirmation of non-application |
+| `UNSUPPORTED_YES_NO_CLEAR` | A correction requests blanking a yes/no answer; no supported route is verified |
+| `ENTRY_CORRECTION_UNCERTAIN` | An attempted correction needs reconciliation; never resend it blindly |
+| `MOBILE_ANSWER_EXISTS` | A scalar row already occupies the requested mobile effective instant |
+| `MOBILE_PREFLIGHT_UNAVAILABLE` | The read cannot establish whether a scalar insert is safe |
+
+The [workflow code table](../browser/workflow-error-codes.mjs) maps existing reasons to codes; new guards supply explicit codes. `committed: false` identifies a pre-write refusal for the named operation. `'unknown'` requires journal/readback reconciliation. Resolution errors separately retain `originalCommitted: 'unknown'` for the original correction. HTTP status and causes are exposed where captured; they are not proof of non-application.
+
+Pending 0.5.0 corrections may have no saved `failure` kind or status. Keep your own original failure evidence for the confirmation callback. Do not repeat the write to recover missing diagnostics.
+
 ## Inspect an upstream error privately
 
 By default the transport discards HTTP error bodies because they can contain client data or credentials. For a controlled diagnostic session, construct `WellSkyClient` with `captureErrorBody: true`. An `UpstreamError` then exposes `responseBody` and `responseBodyTruncated`. The body is capped at 16,384 characters, retained in memory, and excluded from the error's enumerable properties, JSON serialization, and transport hooks/logger events. HTTP 401, 403, 429 and SetAuthKey authentication responses are excluded even with capture enabled. Raw bodies can still contain private information; inspect them through an access-controlled debugger or application diagnostic sink, not ordinary logs.

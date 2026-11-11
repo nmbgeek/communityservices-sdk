@@ -11,3 +11,5 @@ export * from "./enrollment-verifications.js";
 
 export * from "./gwt-enrollments.js";
 export * from "./program-discovery.js";
+export * from "./mobile-preflight.js";
+export * from "./write-labels.js";
