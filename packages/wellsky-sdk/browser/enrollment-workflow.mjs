@@ -10,6 +10,7 @@ import {readProgramCatalog,flattenQuestions,createCatalogWriteLabelResolver,enco
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const positive=v=>Number.isSafeInteger(v)&&v>0;
+const validGroupId=v=>positive(v)||typeof v==='string'&&/^[a-zA-Z0-9_-]+$/.test(v);
 const entryExitTypes=['HUD','Basic','Standard','RHY','VA','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit'];
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
@@ -433,7 +434,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   for(const target of targets){fields(target,['clientId','enrollmentId']);if(!positive(target.clientId)||!positive(target.enrollmentId))fail('explicit enrollment targets required');}
   targets.sort((a,b)=>a.clientId-b.clientId);const ids=targets.map(t=>t.clientId);
   if(new Set(ids).size!==ids.length||new Set(targets.map(t=>t.enrollmentId)).size!==targets.length)fail('duplicate adoption targets');
-  if(household&&(!positive(input.householdId)||!positive(input.headClientId)||!ids.includes(input.headClientId)||typeof api.households?.get!=='function'))fail('household, original head and complete enrollment cohort required');
+  if(household&&(!positive(input.householdId)||!positive(input.headClientId)||!ids.includes(input.headClientId)))fail('household, original head and complete enrollment cohort required');
   const owner=hash({adoption:true,input}),intentHash=hash(input);
   return withClients(ids,async()=>{
    const locked=household?work=>store.withLock(householdScope(input.headClientId),work):work=>work();
@@ -466,7 +467,13 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     }
     const head=snapshots.find(r=>r.target.clientId===(household?input.headClientId:input.clientId));
     if(snapshots.some(r=>r.s.providerId!==head.s.providerId||r.s.enrollmentType!==head.s.enrollmentType||r.start<head.start||r.end>head.end))fail('invalid enrollment data: adopted members require matching program and head coverage');
-    if(household){
+    const native=household&&snapshots.some(r=>r.s.householdId!==undefined);
+    if(native){
+     if(snapshots.some(r=>r.s.householdId!==input.householdId))fail('adoption household differs from enrollment association',{code:'ADOPTION_ENROLLMENT_HOUSEHOLD_MISMATCH'});
+     if(!validGroupId(head.s.groupId)||snapshots.some(r=>r.s.groupId!==head.s.groupId||r.s.grouped===false)||group?.context.groupId!==undefined&&group.context.groupId!==head.s.groupId)fail('adoption enrollment group changed',{code:'ADOPTION_ENROLLMENT_GROUP_MISMATCH'});
+    }
+    if(household&&!native){
+     if(typeof api.households?.get!=='function')fail('household, original head and complete enrollment cohort required');
      const found=toItems(await api.households.get({path:{householdId:input.householdId}}));
      if(found.length!==1||found[0].householdId!==input.householdId||found[0].isActive===false||!Array.isArray(found[0].clients))fail('active household required for adoption');
      const members=found[0].clients,heads=members.filter(m=>m.headofhouseholdStatus&&m.isActive!==false&&!m.dateLeft);
@@ -478,10 +485,11 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
      const context={clientId:r.target.clientId,providerId:r.s.providerId,type:r.s.enrollmentType,entryDate:new Date(r.start).toISOString()};
      const discovered=await discover(context),schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
      const headQuestion=discovered.entry.definition.questions.find(q=>q.fieldName==='HUD_RELATIONTOHOH');
+     if(native&&!headQuestion&&group?.stage!=='verified')fail('native adoption requires original entry head relationship evidence',{code:'ADOPTION_HEAD_EVIDENCE_REQUIRED'});
      if(headQuestion){
       const self=headQuestion.options.filter(o=>o.code==='RELATIONHOH_SELF'),answers=questions(await api.assessments.get({path:{clientId:r.target.clientId,assessmentCode:discovered.entry.assessment.code},query:{dateEffective:context.entryDate}}));
       const answer=answers.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH')?.answer_value;
-      if(self.length!==1||answer===null||answer===undefined||answer===''||(String(answer)===String(self[0].id))!==(r.target.clientId===head.target.clientId))fail('adoption requires the original enrollment head relationship');
+      if(self.length!==1||answer===null||answer===undefined||answer===''||!headQuestion.options.some(o=>String(o.id)===String(answer))||(String(answer)===String(self[0].id))!==(r.target.clientId===head.target.clientId))fail('adoption requires the original enrollment head relationship');
      }
      const existing=prior.get(r.target.clientId);
      if(existing&&(existing.enrollmentId!==r.target.enrollmentId||canonical(existing.context)!==canonical(context)||existing.schemaHash!==schemaHash))fail('adopted enrollment identity or configuration changed');
@@ -491,17 +499,18 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const results=prepared.map(r=>({key:r.key,outcome:wasVerified?'already-present':'verified',clientId:r.context.clientId,enrollmentId:r.enrollmentId,assessmentCode:r.assessmentCode,effectiveDate:r.context.entryDate,recordsetIds:structuredClone(r.rows)}));
     if(household){
      if(!group){group={version:1,key:input.key,kind:'entry',adopted:true,intentHash,context:{householdId:input.householdId,headClientId:input.headClientId,providerId:head.s.providerId,type:head.s.enrollmentType,entryDate:new Date(head.start).toISOString()},clientIds:ids,stage:'pending',members:{},attached:true};groups.push(group);}
+     if(native){group.context.groupId=head.s.groupId;group.context.householdSource='native-enrollment';}
      await store.write(householdScope(input.headClientId),structuredClone(groups));
      for(const clientId of ids)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'pending'}]));
     }
     for(const r of prepared){if(!prior.get(r.context.clientId))journals.get(r.context.clientId).push(r);await store.write(scope(r.context.clientId),structuredClone(journals.get(r.context.clientId)));}
-    if(household){group.members=Object.fromEntries(results.map(r=>[r.clientId,r]));group.stage='verified';await store.write(householdScope(input.headClientId),structuredClone(groups));for(const clientId of ids)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'verified'}]));return {key:input.key,outcome:wasVerified?'already-present':'verified',householdId:input.householdId,headClientId:input.headClientId,members:results};}
+    if(household){group.members=Object.fromEntries(results.map(r=>[r.clientId,r]));group.stage='verified';await store.write(householdScope(input.headClientId),structuredClone(groups));for(const clientId of ids)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'verified'}]));return {key:input.key,outcome:wasVerified?'already-present':'verified',householdId:input.householdId,...(native?{groupId:head.s.groupId,householdSource:'native-enrollment'}:{}),headClientId:input.headClientId,members:results};}
     return results[0];
    });
   });
  };
  const householdRun=async(kind,raw,operation={attempted:false})=>{
-  if(typeof enrollmentSession?.readEnrollment!=='function'||typeof helpers.addHouseholdMembers!=='function'||typeof api.households?.get!=='function')fail('household API and authoritative enrollment session required');
+  if(typeof enrollmentSession?.readEnrollment!=='function'||['entry','addition'].includes(kind)&&(typeof helpers.addHouseholdMembers!=='function'||typeof api.households?.get!=='function'))fail('household API and authoritative enrollment session required');
   fields(raw,kind==='addition'?['key','enrollmentKey','headClientId','entryDate','members']:kind==='entry'?['key','householdId','headClientId','providerId','type','entryDate','members']:['key','enrollmentKey','headClientId',kind==='exit'?'exitDate':'reviewDate','members',...(kind==='exit'?['destination','reasonForLeaving','destinationDetails','reasonForLeavingOther']:[])]);
   const input=structuredClone(raw);key(input.key);
   if(kind==='exit'&&(typeof exitUi?.saveExit!=='function'||typeof exitUi?.validateExit!=='function'||typeof input.destination!=='string'||!input.destination.trim()||typeof input.reasonForLeaving!=='string'||!input.reasonForLeaving.trim()))fail('exit UI, destination and reason for leaving required');
@@ -543,14 +552,25 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const cohortIds=[...new Set([...Object.keys(catalog).map(Number),...ids])].sort((a,b)=>a-b);
    const context=kind==='entry'?{householdId:input.householdId,headClientId:input.headClientId,providerId:input.providerId,type:input.type,entryDate:input.entryDate}:kind==='addition'?{...entry.context,entryDate:input.entryDate}:entry.context;
    if(!['entry','addition'].includes(kind)&&ids.some(id=>restDate(input.exitDate??input.reviewDate)<restDate(catalog[id].entryDate)))fail('review precedes entry');
-   const household=toItems(await api.households.get({path:{householdId:context.householdId}}));
-   if(household.length!==1||household[0].householdId!==context.householdId||household[0].isActive===false||!Array.isArray(household[0].clients))fail('active household required');
-   const people=household[0].clients;
-   if(new Set(people.map(p=>p.clientId)).size!==people.length)fail('ambiguous household membership');
-   const heads=people.filter(p=>p.headofhouseholdStatus&&p.isActive!==false&&!p.dateLeft);
-   if(heads.length===0)fail('invalid enrollment data: household has no active head of household');
-   if(heads.length!==1||heads[0].clientId!==input.headClientId)fail('household head mismatch; head changes are a red flag and require separate retroactive correction or a fresh enrollment');
-   for(const clientId of ids){const p=people.find(p=>p.clientId===clientId);if(!p||p.isActive===false||p.dateLeft||!Number.isFinite(restDate(p.dateJoined))||restDate(p.dateJoined)>restDate(catalog[clientId]?.entryDate??context.entryDate))fail('member is not active in household at entry');}
+   let nativeGroupId;
+   if(!['entry','addition'].includes(kind)){
+    const anchor=await enrollmentSession.readEnrollment({clientId:input.headClientId,enrollmentId:catalog[input.headClientId]?.enrollmentId});
+    if(anchor?.householdId!==undefined||entry.context.groupId!==undefined||record?.context.groupId!==undefined){
+     if(!positive(anchor?.householdId)||anchor.householdId!==context.householdId||!validGroupId(anchor?.groupId)||anchor.grouped===false||entry.context.groupId!==undefined&&entry.context.groupId!==anchor.groupId||record?.context.groupId!==undefined&&record.context.groupId!==anchor.groupId)fail('native enrollment household or group changed',{code:'HOUSEHOLD_NATIVE_LINK_CHANGED'});
+     nativeGroupId=anchor.groupId;
+    }
+   }
+   if(nativeGroupId===undefined){
+    if(typeof api.households?.get!=='function')fail('household API and authoritative enrollment session required');
+    const household=toItems(await api.households.get({path:{householdId:context.householdId}}));
+    if(household.length!==1||household[0].householdId!==context.householdId||household[0].isActive===false||!Array.isArray(household[0].clients))fail('active household required');
+    const people=household[0].clients;
+    if(new Set(people.map(p=>p.clientId)).size!==people.length)fail('ambiguous household membership');
+    const heads=people.filter(p=>p.headofhouseholdStatus&&p.isActive!==false&&!p.dateLeft);
+    if(heads.length===0)fail('invalid enrollment data: household has no active head of household');
+    if(heads.length!==1||heads[0].clientId!==input.headClientId)fail('household head mismatch; head changes are a red flag and require separate retroactive correction or a fresh enrollment');
+    for(const clientId of ids){const p=people.find(p=>p.clientId===clientId);if(!p||p.isActive===false||p.dateLeft||!Number.isFinite(restDate(p.dateJoined))||restDate(p.dateJoined)>restDate(catalog[clientId]?.entryDate??context.entryDate))fail('member is not active in household at entry');}
+   }
    for(const clientId of cohortIds){const reservations=await store.withLock(reservationScope(clientId),()=>store.read(reservationScope(clientId)));if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'&&r.owner!==owner))fail('unfinished household workflow must be reconciled first');}
    const validateSnapshot=(snapshot,target,{partial=false}={})=>{
     if(snapshot?.source!=='gwt-rpc'||snapshot.tenant!==api.tenant||snapshot.clientId!==target.clientId||snapshot.enrollmentId!==target.enrollmentId||snapshot.providerId!==context.providerId||snapshot.enrollmentType!==context.type||restDate(snapshot.projectStartDate)!==restDate(catalog[target.clientId]?.entryDate??context.entryDate))fail('household enrollment context mismatch');
@@ -559,7 +579,9 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     if(!Array.isArray(members)||members.some(m=>!positive(m.clientId)||!positive(m.enrollmentId))||new Set(members.map(m=>m.clientId)).size!==members.length||new Set(members.map(m=>m.enrollmentId)).size!==members.length||!members.some(m=>m.clientId===target.clientId&&m.enrollmentId===target.enrollmentId))fail('invalid household enrollment members');
     const actual=members.map(m=>m.clientId).sort((a,b)=>a-b);
     if(partial?actual.some(id=>!cohortIds.includes(id)):canonical(actual)!==canonical(cohortIds))fail('household enrollment members changed');
-    if(!Array.isArray(snapshot.householdClientIds)||cohortIds.some(id=>!snapshot.householdClientIds.includes(id)))fail('household members unavailable');
+    const pinnedGroup=nativeGroupId??context.groupId;
+    if(pinnedGroup!==undefined){if(snapshot.householdId!==context.householdId||snapshot.groupId!==pinnedGroup||snapshot.grouped===false)fail('native enrollment household or group changed',{code:'HOUSEHOLD_NATIVE_LINK_CHANGED'});}
+    if(nativeGroupId===undefined&&(!Array.isArray(snapshot.householdClientIds)||cohortIds.some(id=>!snapshot.householdClientIds.includes(id))))fail('household members unavailable');
     for(const m of members){const known=record?.members[m.clientId]?.enrollmentId??catalog[m.clientId]?.enrollmentId;if(known&&known!==m.enrollmentId)fail('household enrollment identity changed');}
     return snapshot;
    };
@@ -589,6 +611,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const preflight=[];for(const member of input.members)preflight.push(await run(kind==='addition'?'entry':kind,toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,preflight:true,...(kind==='addition'?{pinSchema:true}:{})}));
    if(kind==='addition'&&record?.entrySchemas&&canonical(record.entrySchemas)!==canonical(preflight))fail('additional member assessment configuration changed');
    if(kind==='exit'&&record?.exitSchemas&&canonical(record.exitSchemas)!==canonical(preflight))fail('exit assessment configuration changed');
+   if(nativeGroupId!==undefined){context.groupId=nativeGroupId;context.householdSource='native-enrollment';entry.context.groupId=nativeGroupId;entry.context.householdSource='native-enrollment';if(record){record.context.groupId=nativeGroupId;record.context.householdSource='native-enrollment';}}
    const wasVerified=record?.stage==='verified';
    if(!record){record={version:1,key:input.key,kind,intentHash,context,...(input.enrollmentKey?{enrollmentKey:input.enrollmentKey}:{}),clientIds:ids,stage:'pending',members:{},...(kind==='exit'?{exitSchemas:preflight}:kind==='addition'?{entrySchemas:preflight}:{})};records.push(record);}
    const persist=()=>store.write(householdScope(input.headClientId),structuredClone(records));await persist();
@@ -748,7 +771,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(kind==='exit'||kind==='addition')await preserve();
    await validateHeadCoverage();
    record.stage='verified';await persist();for(const clientId of cohortIds)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'verified'}]));
-   return {key:input.key,outcome:wasVerified?'already-present':'verified',householdId:context.householdId,headClientId:input.headClientId,members:ids.map(id=>structuredClone(record.members[id]))};
+   return {key:input.key,outcome:wasVerified?'already-present':'verified',householdId:context.householdId,...(context.groupId!==undefined?{groupId:context.groupId,householdSource:context.householdSource}:{}),headClientId:input.headClientId,members:ids.map(id=>structuredClone(record.members[id]))};
   }));
  };
  return {
@@ -767,7 +790,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const records=await store.read(householdScope(input.headClientId));if(!Array.isArray(records))fail('invalid household journal');
     const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate household journal keys');const record=matches[0];if(!record)return null;
     if(record.version!==1||!object(record.members))fail('invalid household journal');
-    return {key:record.key,kind:record.kind,stage:record.stage,householdId:record.context.householdId,headClientId:input.headClientId,members:record.clientIds.map(clientId=>({clientId,key:memberKey(input.key,clientId),...structuredClone(record.members[clientId]??{})}))};
+    return {key:record.key,kind:record.kind,stage:record.stage,householdId:record.context.householdId,...(record.context.groupId!==undefined?{groupId:record.context.groupId,householdSource:record.context.householdSource}:{}),headClientId:input.headClientId,members:record.clientIds.map(clientId=>({clientId,key:memberKey(input.key,clientId),...structuredClone(record.members[clientId]??{})}))};
    });
    });
   },

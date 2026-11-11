@@ -507,3 +507,48 @@ test('household members retain distinct DOB-quality-only answers through entry a
  const before=structuredClone(f.counts);i.members.reverse();review.members.reverse();assert.equal((await f.workflow().createHouseholdEnrollment(i)).outcome,'already-present');assert.equal((await f.workflow().createHouseholdInterim(review)).outcome,'already-present');assert.deepEqual(f.counts,before);
  for(const id of [1,2]){const history=f.clients.get(id).history;assert.equal(history.filter(h=>h.field==='SVPPROFDOB').length,0);assert.deepEqual(history.filter(h=>h.field==='SVPPROFDOBTYPE').map(h=>h.value),[id===1?'91':'92']);}
 });
+
+function nativeHouseholdFixture(){
+ const f=headFixture(),read=f.enrollmentSession.readEnrollment;
+ f.enrollmentSession.readEnrollment=async target=>({...await read(target),householdId:30,groupId:50,grouped:true});
+ const withHead=input=>({...input,members:input.members.map(m=>({...m,assessment:{...m.assessment,carryForward:[...(m.assessment.carryForward??[]),'HUD_RELATIONTOHOH']}}))});
+ return {...f,withHead};
+}
+test('native household discovery and adoption use the enrollment link without current household reads',async()=>{
+ const f=nativeHouseholdFixture();await f.workflow().createHouseholdEnrollment(f.entry);f.journal.clear();
+ f.api.households={get:async()=>assert.fail('Current household is not historical enrollment identity'),listForClient:async()=>assert.fail('Do not infer a household')};
+ const input={key:'native-adopt',headClientId:1,headEnrollmentId:50},before=structuredClone(f.counts);
+ const d=await f.workflow().discoverHouseholdEnrollment({headClientId:1,headEnrollmentId:50});assert.equal(d.householdId,30);assert.equal(d.groupId,50);assert.equal(d.householdSource,'native-enrollment');
+ const adopted=await f.workflow().adoptHouseholdEnrollment(input);assert.equal(adopted.householdId,30);assert.equal(adopted.groupId,50);assert.deepEqual(f.counts,before);
+ assert.equal((await f.workflow().adoptHouseholdEnrollment(input)).outcome,'already-present');assert.deepEqual(f.counts,before);
+ const review=f.withHead({...interimInput(),enrollmentKey:input.key});await f.workflow().createHouseholdInterim(review);const reviewed=structuredClone(f.counts);await f.workflow().createHouseholdInterim(review);assert.deepEqual(f.counts,reviewed);
+ const exit=f.withHead({...exitInput(),enrollmentKey:input.key});await f.workflow().exitHousehold(exit);const after=structuredClone({counts:f.counts,exits:f.exitCounts});await f.workflow().exitHousehold(exit);assert.deepEqual({counts:f.counts,exits:f.exitCounts},after);
+});
+test('native household and group mismatches refuse adoption before journaling or mutation',async()=>{
+ for(const mode of ['null','different-household','different-group','missing-native-member']){
+  const f=nativeHouseholdFixture();await f.workflow().createHouseholdEnrollment(f.entry);f.journal.clear();const read=f.enrollmentSession.readEnrollment;
+  f.enrollmentSession.readEnrollment=async target=>{const s=await read(target);if(mode==='null')s.householdId=null;if(target.clientId===2){if(mode==='different-household')s.householdId=31;if(mode==='different-group')s.groupId=99;if(mode==='missing-native-member')delete s.householdId;}return s;};
+  const before=structuredClone(f.counts);await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'native-adopt',headClientId:1,headEnrollmentId:50}),e=>e.committed===false);assert.equal(f.journal.size,0);assert.deepEqual(f.counts,before);
+ }
+});
+test('explicit adoption cannot override the enrollment household, and native adoption needs original head evidence',async()=>{
+ const f=nativeHouseholdFixture();await f.workflow().createHouseholdEnrollment(f.entry);f.journal.clear();const members=f.entries.map(({clientId,enrollmentId})=>({clientId,enrollmentId}));
+ await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'wrong-household',householdId:31,headClientId:1,members}),e=>e.code==='ADOPTION_ENROLLMENT_HOUSEHOLD_MISMATCH'&&e.committed===false);
+ await assert.rejects(f.workflow().adoptHouseholdEnrollment({key:'wrong-head',headClientId:2,headEnrollmentId:52}),/original enrollment head relationship|head coverage/);
+ const g=fixture();await g.workflow().createHouseholdEnrollment(entryInput());g.journal.clear();const read=g.enrollmentSession.readEnrollment;g.enrollmentSession.readEnrollment=async t=>({...await read(t),householdId:30,groupId:50,grouped:true});
+ await assert.rejects(g.workflow().adoptHouseholdEnrollment({key:'no-head-proof',headClientId:1,headEnrollmentId:50}),e=>e.code==='ADOPTION_HEAD_EVIDENCE_REQUIRED'&&e.committed===false);assert.equal(g.journal.size,0);
+});
+test('native lifecycle reads preserve legacy journal keys and no longer require current membership',async()=>{
+ const f=headFixture();await f.workflow().createHouseholdEnrollment(f.entry);f.journal.clear();
+ const explicit={key:'legacy',householdId:30,headClientId:1,members:f.entries.map(({clientId,enrollmentId})=>({clientId,enrollmentId}))};await f.workflow().adoptHouseholdEnrollment(explicit);
+ const read=f.enrollmentSession.readEnrollment;f.enrollmentSession.readEnrollment=async target=>({...await read(target),householdId:30,groupId:50,grouped:true,householdClientIds:[target.clientId]});delete f.api.households;
+ const before=structuredClone(f.counts);assert.equal((await f.workflow().adoptHouseholdEnrollment({key:'legacy',headClientId:1,headEnrollmentId:50})).outcome,'already-present');assert.deepEqual(f.counts,before);
+ const review={...interimInput(),enrollmentKey:'legacy'};for(const m of review.members)m.assessment.carryForward.push('HUD_RELATIONTOHOH');await f.workflow().createHouseholdInterim(review);
+ assert.equal((await f.workflow().getHouseholdStatus({headClientId:1,key:'legacy'})).groupId,50);
+ const prior=structuredClone(f.counts);f.enrollmentSession.readEnrollment=async target=>({...await read(target),householdId:30,groupId:51,grouped:true});await assert.rejects(f.workflow().createHouseholdInterim({...review,key:'changed-group'}),e=>e.code==='HOUSEHOLD_NATIVE_LINK_CHANGED');assert.deepEqual(f.counts,prior);
+});
+test('existing native enrollment journals support reviews after household changes, but additions still require current membership',async()=>{
+ const f=nativeHouseholdFixture();await f.workflow().createHouseholdEnrollment(f.entry);f.household.isActive=false;
+ await f.workflow().createHouseholdInterim(f.withHead(interimInput()));assert.equal(f.counts.review,1);
+ const before=structuredClone(f.counts);await assert.rejects(f.workflow().addHouseholdMembers({key:'additional',enrollmentKey:'entry',headClientId:1,entryDate:'2026-10-24T16:00:00Z',members:[{clientId:3,assessment:assessment(3)}]}));assert.deepEqual(f.counts,before);
+});

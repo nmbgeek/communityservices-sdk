@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0 - 2026-11-11
+
+- Expose native `householdId` on managed GWT enrollment list/detail reads, separately from `groupId`.
+- Discover and adopt linked enrollments from the head's IDs using the recorded household association, with cohort-wide consistency and original-head checks. Explicit household IDs must match the enrollment record.
+- Use pinned native household/group identity for existing-group interims and exits, allowing changed current membership while preserving original enrollment-head coverage. Creation and additions still validate current membership.
+- Preserve existing adoption keys and legacy custom-reader behavior; discovery reports whether evidence is `native-enrollment` or `verified-membership`.
+- Verify native reads on existing training Coordinated Entry groups and read-only adoption of open/exited groups with no-write retries. No live enrollment or assessment records were changed.
+
 ## 0.8.1 - 2026-11-11
 
 - Recheck mobile scalar collisions immediately before the first scalar-stage attempt, including answers that appeared after enrollment or review creation. Refuse known collisions and unavailable evidence without sending the batch or marking that stage attempted; preserve earlier lifecycle writes and prior-attempt reconciliation.

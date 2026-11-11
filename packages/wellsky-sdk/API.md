@@ -107,7 +107,10 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `ADOPTED_ENROLLMENT_IDENTITY_OR_CONFIGURATION_CHANGED` | adopted enrollment identity or configuration changed |
 | `ADOPTION_COMPLETE_COHORT_REQUIRED` | adoption requires the complete linked enrollment cohort |
 | `ADOPTION_ENROLLMENT_CONTEXT_MISMATCH` | adoption enrollment context mismatch |
+| `ADOPTION_ENROLLMENT_GROUP_MISMATCH` | adoption enrollment group changed<br>adoption enrollment group mismatch |
+| `ADOPTION_ENROLLMENT_HOUSEHOLD_MISMATCH` | adoption enrollment household mismatch<br>adoption household differs from enrollment association |
 | `ADOPTION_EXIT_PRECEDES_ENTRY` | adoption exit precedes entry |
+| `ADOPTION_HEAD_EVIDENCE_REQUIRED` | adoption head evidence required<br>native adoption requires original entry head relationship evidence |
 | `ADOPTION_HOUSEHOLD_HEAD_MISMATCH` | adoption household head mismatch |
 | `ADOPTION_HOUSEHOLD_MEMBERSHIP_MISMATCH` | adoption household membership mismatch |
 | `ADOPTION_HOUSEHOLD_REQUIRED` | linked household enrollment requires adoptHouseholdEnrollment |
@@ -200,12 +203,13 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `HEAD_OF_HOUSEHOLD_CHANGE_IS_A_RED_FLAG_USE_A_SEPARATE_RETROACTIVE_CORRECTION_FOR_A_MEMBER_WITH` | head of household change is a red flag; use a separate retroactive correction for a member with the same first entry date, or exit all enrollments and create a fresh enrollment |
 | `HOUSEHOLD_API_AND_AUTHORITATIVE_ENROLLMENT_SESSION_REQUIRED` | household API and authoritative enrollment session required |
 | `HOUSEHOLD_DISCOVERY_AMBIGUOUS` | a unique current household matching the full cohort, head and dates is required |
-| `HOUSEHOLD_DISCOVERY_COHORT_CHANGED` | household membership changed during discovery<br>linked enrollment cohort changed during discovery |
+| `HOUSEHOLD_DISCOVERY_COHORT_CHANGED` | household membership changed during discovery<br>linked enrollment cohort changed during discovery<br>native household or enrollment cohort changed during discovery<br>native household or enrollment group changed during discovery |
 | `HOUSEHOLD_DISCOVERY_DETAIL_INVALID` | complete linked enrollment cohort required<br>group flag conflicts with linked cohort |
 | `HOUSEHOLD_DISCOVERY_INPUT_INVALID` | head client and enrollment IDs required |
 | `HOUSEHOLD_DISCOVERY_LIST_INCOMPLETE` | household list count unavailable or changed<br>incomplete household list<br>invalid household list |
+| `HOUSEHOLD_DISCOVERY_NATIVE_LINK_REQUIRED` | native household and enrollment group IDs required |
 | `HOUSEHOLD_DISCOVERY_NOT_FOUND` | a unique current household matching the full cohort, head and dates is required |
-| `HOUSEHOLD_DISCOVERY_READERS_REQUIRED` | GWT detail and complete household readers required |
+| `HOUSEHOLD_DISCOVERY_READERS_REQUIRED` | authoritative enrollment reader required<br>legacy readers require complete household readers |
 | `HOUSEHOLD_ENROLLMENT_CONTEXT_MISMATCH` | household enrollment context mismatch |
 | `HOUSEHOLD_ENROLLMENT_IDENTITY_CHANGED` | household enrollment identity changed |
 | `HOUSEHOLD_ENROLLMENT_MEMBERS_CHANGED` | household enrollment members changed |
@@ -214,6 +218,7 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `HOUSEHOLD_KEY_CONFLICTS_WITH_PREVIOUS_INTENT` | household key conflicts with previous intent |
 | `HOUSEHOLD_MEMBERS_UNAVAILABLE` | household members unavailable |
 | `HOUSEHOLD_MEMBERSHIP_CHANGED_WHILE_ACQUIRING_LOCKS_RETRY` | household membership changed while acquiring locks; retry |
+| `HOUSEHOLD_NATIVE_LINK_CHANGED` | household native link changed<br>native enrollment household or group changed |
 | `HOUSEHOLD_ORIGINAL_HEAD_AND_COMPLETE_ENROLLMENT_COHORT_REQUIRED` | household, original head and complete enrollment cohort required |
 | `HOUSEHOLD_PROGRAM_AND_SUPPORTED_ENTRY_EXIT_TYPE_REQUIRED` | household, program and supported Entry/Exit type required |
 | `HOUSEHOLD_REVIEW_IDENTITY_CHANGED` | household review identity changed |

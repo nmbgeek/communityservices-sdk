@@ -1,6 +1,6 @@
 import {createEnrollmentWorkflow,type EnrollmentWorkflowOptions,type EntryCorrectionInput} from '@choiceapps/communityservices-sdk/browser';
 
-/** The head's explicit target identifies a cohort; ambiguous household matches fail. */
+/** Built-in readers verify the native household and group; older adapters identify their membership fallback explicitly. */
 export async function adoptFromHead(dependencies:EnrollmentWorkflowOptions,input:{key:string;headClientId:number;headEnrollmentId:number}){
  const workflow=createEnrollmentWorkflow(dependencies);
  const discovery=await workflow.discoverHouseholdEnrollment({headClientId:input.headClientId,headEnrollmentId:input.headEnrollmentId});

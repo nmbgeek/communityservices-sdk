@@ -11,7 +11,7 @@ function wire(rows){
  stream.push(0,0,5,rows.length);return '//OK'+JSON.stringify(stream.reverse().concat([strings,0,7]));
 }
 function fixture(extra={},navigation={}){
- const calls=[],events=[],entry={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',groupId:null,providerId:16951,enrollmentType:'HUD',...extra};
+ const calls=[],events=[],entry={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',groupId:null,householdId:null,providerId:16951,enrollmentType:'HUD',...extra};
  const dialogs=new Set(navigation.visibleInterim?['EntryExitAssessment.btnExit-button','EntryExitReviewListPopup.btnExit']:[]);
  let headingVisible=!navigation.staleHeading,navigationStarted=false;
  const locator=selector=>({
@@ -85,7 +85,7 @@ test('enrollment reader rejects incomplete or malformed exit metadata',async()=>
 
 function listFixture(faults={}){
  const calls=[],listeners=new Set(),events=[];
- const row={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',projectExitDate:null,enrollmentProvider:16951,type:'HUD',groupId:null};
+ const row={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',projectExitDate:null,enrollmentProvider:16951,type:'HUD',groupId:null,householdId:null};
  const request={url:()=>base+'service/MetaQueryService',postData:()=>`7|0|9|${base}|FRESH_POLICY|`,allHeaders:async()=>({'content-type':'text/x-gwt-rpc','x-gwt-module-base':base,'x-gwt-permutation':'FRESH_PERMUTATION'})};
  const page={
   setDefaultTimeout(){},url:()=>faults.wrongTenant?base.replace(testTenant,'wrong')+'index.html':base+'index.html#loadClient;clientId=597',waitForFunction:async()=>{},
@@ -141,4 +141,9 @@ test('picklist catalog refuses incomplete identities and invalid IDs',async()=>{
  }
  const f=catalogFixture();for(const optionIds of [[0],['1'],[1.5],Array(10001).fill(1)])await assert.rejects(f.reader.readPicklistOptions({clientId:597,optionIds}));assert.equal(f.calls.length,0);
  assert.equal((await f.reader.readPicklistOptions({clientId:597,optionIds:[]})).count,0);
+});
+test('managed enrollment reads expose the native household ID separately from group ID',async()=>{
+ const detail=await fixture({householdId:30}).read();assert.equal(detail.householdId,30);assert.equal(detail.groupId,null);
+ const f=listFixture(),rows=[{...f.row,householdId:30,groupId:50},{...f.row,enrollmentId:696,householdId:31,groupId:60}],list=listFixture({rows});const result=await list.read();assert.deepEqual(result.values.map(r=>[r.householdId,r.groupId]),[[30,50],[31,60]]);assert.equal(list.calls.length,1);assert.match(list.calls[0].body,/e.householdId AS householdId/);
+ for(const householdId of [undefined,0,-1,'30',{}]){await assert.rejects(fixture({householdId}).read(),/household ID|Invalid GWT/);await assert.rejects(listFixture({rows:[{...f.row,householdId}]}).read(),/household ID|Invalid GWT/);}
 });
