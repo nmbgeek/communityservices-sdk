@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1 - 2026-11-11
+
+- Keep the pinned Chromium download and full browser checks on GitHub Ubuntu 24.04 runners while using their preinstalled runtime libraries. Avoid the redundant APT/font installation that blocked 0.9.0 public publication when the Ubuntu mirror failed DNS resolution. SDK runtime behavior is unchanged from 0.9.0.
+
 ## 0.9.0 - 2026-11-11
 
 - Expose native `householdId` on managed GWT enrollment list/detail reads, separately from `groupId`.
