@@ -260,7 +260,10 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `MEMBER_ALREADY_HAS_AN_INDEPENDENT_MATCHING_ENROLLMENT` | member already has an independent matching enrollment |
 | `MEMBER_CLIENT_AND_ASSESSMENT_REQUIRED` | member client and assessment required |
 | `MEMBER_ENROLLMENT_HAS_NOT_BEEN_ATTACHED` | member enrollment has not been attached |
+| `MEMBER_ENTRY_DATE_INPUT_INVALID` | member entry date input invalid |
 | `MEMBER_ENTRY_DATE_PORT_REQUIRED` | member entry date port required |
+| `MEMBER_ENTRY_DATE_PREFLIGHT_FAILED` | member entry date plan rejected<br>member entry date preflight failed |
+| `MEMBER_ENTRY_DATE_TYPE_UNSUPPORTED` | member entry date type unsupported |
 | `MEMBER_EXIT_IDENTITY_MISSING` | member exit identity missing |
 | `MEMBER_IS_NOT_ACTIVE_IN_HOUSEHOLD_AT_ENTRY` | member is not active in household at entry |
 | `MOBILE_ANSWER_EXISTS` | mobile answer exists<br>mobile scalar answer already exists at the effective date |

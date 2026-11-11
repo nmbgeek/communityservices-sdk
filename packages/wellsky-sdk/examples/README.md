@@ -21,6 +21,7 @@ Every file here ships with the package and imports the public `@choiceapps/commu
 | [entry-correction-workflow.mts](entry-correction-workflow.mts) | Same-date scalar clears and existing row edits | Original entry/row keys, verified lookup labels and durable store required |
 | [existing-enrollment-exits.mts](existing-enrollment-exits.mts) | Adopt manual individual or household entries, then exit | Explicit enrollment identities and original household head required |
 | [household-enrollment-workflow.mts](household-enrollment-workflow.mts) | Per-member enrollment and review | Existing household and per-member answer plans required |
+| [member-entry-date-preflight.mts](member-entry-date-preflight.mts) | All-type date ports and custom pre-attachment validation | Plan validation precedes attachment; full cohort validation still follows |
 | [household-lifecycle-workflow.mts](household-lifecycle-workflow.mts) | Selected exits and a later child entry | Household membership precedes program attachment |
 | [household-exit-workflow.mts](household-exit-workflow.mts) | Household exit with destination details | Explicit exit dates and per-member plans required |
 | [gwt-enrollment-session.ts](gwt-enrollment-session.ts) | Custom GWT session and journal integration | Caller supplies all target IDs and dates |

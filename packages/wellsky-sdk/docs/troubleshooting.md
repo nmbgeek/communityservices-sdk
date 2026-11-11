@@ -32,7 +32,7 @@ Successful adoption of an existing record also needs its journal. Retain it even
 | `ENTRY_CORRECTION_UNCERTAIN` | An attempted correction is not verified | Inspect `status`, `cause`, and journal step diagnostics; use [explicit resolution](enrollments.md#resolve-a-rejected-correction) only with independent non-application evidence |
 | `ENTRY_CORRECTION_REJECTED` | The old correction key was resolved as not applied | Keep its audit record and use a new key for corrected intent |
 | `EnrollmentWorkflowError` | Invalid plan, missing head, schema drift, conflict, or unresolved stage | Inspect the specific reason and local status; fix application inputs only before reservation, otherwise reconcile original intent |
-| `SessionInterruptedError`, `SESSION_INTERRUPTED` | Managed page operation ended around session expiry | Check `reauthenticated`; retry the original workflow call, never its prepared RPC |
+| `SessionInterruptedError`, `SESSION_INTERRUPTED` | Managed page operation ended around session expiry | Inspect `cause`, `status`, `authenticationStatus` and `reauthenticated`; distinguish deterministic preparation failures from expiry, then reconcile the original key without replaying a prepared RPC |
 | `LoginError`, `PASSWORD_EXPIRED` | Expiration detected with recovery disabled | Use the documented recovery option or resolve the password outside the helper |
 | `LoginError`, `RECOVERY_UNCERTAIN` | Password write/check outcome unresolved | Retain original password, suffix, and recovery journal; determine which credential is active without repeating password writes |
 | `LoginError`, `RECOVERY_CONFIGURATION` or `LOGIN_FAILED` | Invalid recovery setup or login failure | Correct the supplied file/options/account; avoid automatic login loops |

@@ -210,20 +210,21 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     }else{
       await closeDialogs();const row=control(page,`ClientEntryExitTab.editEntry-imageLink_${intent.enrollmentId}`).locator('xpath=ancestor::tr');
       await row.locator('[title^="Interim Reviews:"]').click();await control(page,'EntryExitReviewListPopup.addReviewButton').waitFor();await ready();await control(page,'EntryExitReviewListPopup.addReviewButton').click();await control(page,'ModifyReviewPopup.saveAndContinue-button').waitFor();await ready();
-      const soleClient=snapshot.members.length===1&&snapshot.members[0].clientId===intent.clientId&&snapshot.householdClientIds.length===1&&snapshot.householdClientIds[0]===intent.clientId;
-      singleClientReview=await chooseMembers(intent.clientIds,soleClient?intent.clientId:undefined,'ModifyReviewPopup.saveAndContinue-button');await page.getByLabel('Interim Review Type',{exact:true}).selectOption({label:'Update'});
+      singleClientReview=intent.clientIds.length===1&&intent.clientIds[0]===intent.clientId;
+      await page.getByLabel('Interim Review Type',{exact:true}).selectOption({label:'Update'});
       const fields=await page.evaluate(value=>{const d=new Date(value);if(d.getMilliseconds())throw Error('UI supports whole seconds only');const local=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),d.getMinutes(),d.getSeconds());if(+local!==+d)throw Error('Ambiguous local review time');return {Month:String(d.getMonth()+1).padStart(2,'0'),Day:String(d.getDate()).padStart(2,'0'),Year:String(d.getFullYear()),Hour:String(d.getHours()%12||12),Minute:String(d.getMinutes()).padStart(2,'0'),Second:String(d.getSeconds()).padStart(2,'0'),'AM/PM':d.getHours()<12?'AM':'PM'};},intent.reviewDate);
       for(const [part,value]of Object.entries(fields)){const c=page.getByLabel(`Review Date ${part}`,{exact:true});if(['Month','Day','Year'].includes(part))await c.fill(value);else await c.selectOption({label:value});}
       if(JSON.stringify(fields)!==JSON.stringify(await dateFields('Review Date')))throw Error('Review date mismatch');
+      await chooseMembers(intent.clientIds,singleClientReview?intent.clientId:undefined,'ModifyReviewPopup.saveAndContinue-button');
       save=control(page,'ModifyReviewPopup.saveAndContinue-button');
     }
-    const expected=intent.kind==='add-household-members'?'updateEntryExitWithHouseholdMembers':singleClientReview?'createEntryExitReview':'createEntryExitReviewWithHouseholdMembers';
+    const expected=intent.kind==='add-household-members'?['updateEntryExitWithHouseholdMembers']:singleClientReview?['createEntryExitReview','createEntryExitReviewWithHouseholdMembers']:['createEntryExitReviewWithHouseholdMembers'];
     let resolveCapture;const captured=new Promise(resolve=>{resolveCapture=resolve;});
     const handler=async route=>{
       const r=route.request(),body=r.postData()??'';
       // Block EVERY request while pressing Save. No unexpected RPC can leak through the capture step.
       await route.abort();const tokens=body.split('|');
-      if(r.url()===endpoint&&tokens[6]===expected){const h=await r.allHeaders();resolveCapture({intent:structuredClone(intent),sessionId,revision:snapshot.revision,capturedAt:Date.now(),url:endpoint,body,headers:Object.fromEntries(['content-type','x-gwt-module-base','x-gwt-permutation'].map(k=>[k,h[k]]))});}
+      if(r.url()===endpoint&&expected.includes(tokens[6])){const h=await r.allHeaders();resolveCapture({intent:structuredClone(intent),sessionId,revision:snapshot.revision,capturedAt:Date.now(),url:endpoint,body,headers:Object.fromEntries(['content-type','x-gwt-module-base','x-gwt-permutation'].map(k=>[k,h[k]]))});}
       else resolveCapture(null);
     };
     await page.route('**/service/**',handler);let timer;

@@ -1,6 +1,7 @@
 import { AmbiguousCommitError, ValidationError } from "./errors.js";
 import { correctMobileEffectiveDate } from "./effective-date.js";
 import { WellSkyError } from "./runtime.js";
+import {isRecord} from "./validation.js";
 
 /** Experimental browser-session operations. REST authentication cannot implement this adapter. */
 export type GwtEnrollmentIntent =
@@ -138,7 +139,13 @@ function normalize(value: GwtEnrollmentIntent): GwtEnrollmentIntent {
   }
 }
 function key(intent: GwtEnrollmentIntent): string { return JSON.stringify(normalize(intent)); }
-function protocol(): WellSkyError { return new WellSkyError("protocol", operation); }
+function protocol(cause?:unknown,step?:string): WellSkyError {
+  const status=isRecord(cause)&&typeof cause.status==='number'&&Number.isInteger(cause.status)&&cause.status>=100&&cause.status<=599?cause.status:undefined;
+  const error=new WellSkyError("protocol",operation,status===undefined?{}:{status});
+  if(cause!==undefined)Object.defineProperty(error,'cause',{value:cause,enumerable:false});
+  if(step!==undefined)Object.defineProperty(error,'step',{value:step,enumerable:false});
+  return error;
+}
 
 function validateSnapshot(value: GwtEnrollmentSnapshot, intent: GwtEnrollmentIntent, tenant: string): GwtEnrollmentSnapshot {
   try {
@@ -161,7 +168,7 @@ function validateSnapshot(value: GwtEnrollmentSnapshot, intent: GwtEnrollmentInt
 function present(intent: GwtEnrollmentIntent, snapshot: GwtEnrollmentSnapshot): boolean {
   if (intent.kind === "add-household-members") return intent.memberClientIds.every(clientId => snapshot.members.some(m => m.clientId === clientId));
   const matches = snapshot.reviews.filter(r => r.type === "Update" && instant(r.reviewDate) === intent.reviewDate);
-  if (matches.length > 1 || matches.some(r => !intent.clientIds.every(clientId => r.clientIds.includes(clientId)))) throw new GwtEnrollmentConflictError("review-conflict");
+  if (matches.length > 1 || matches.some(r => r.clientIds.length!==intent.clientIds.length || !intent.clientIds.every(clientId => r.clientIds.includes(clientId)))) throw new GwtEnrollmentConflictError("review-conflict");
   return matches.length === 1;
 }
 
@@ -182,17 +189,16 @@ function validateRequest(value: GwtPreparedEnrollmentMutation, intent: GwtEnroll
     const strings = tokens.slice(3, 3 + count), data = tokens.slice(3 + count);
     const stringAt = (index: string | undefined) => index && /^[1-9]\d*$/.test(index) ? strings[Number(index) - 1] : undefined;
     let expected = signatures[intent.kind];
-    // The UI uses this one-parameter RPC for a client with no household members.
-    // Never treat it as a shortcut for a household review or a selected subset.
+    // The UI uses the one-parameter RPC for one selected member, including a household subset.
+    // Multiple selected members still require the list-parameter signature.
     if (stringAt(data[3]) === "createEntryExitReview") {
       if (intent.kind !== "create-interim-update" || intent.clientIds.length !== 1 || intent.clientIds[0] !== intent.clientId ||
-          snapshot.members.length !== 1 || snapshot.members[0]?.clientId !== intent.clientId || snapshot.members[0]?.enrollmentId !== intent.enrollmentId ||
-          snapshot.householdClientIds.length !== 1 || snapshot.householdClientIds[0] !== intent.clientId) throw protocol();
+          !snapshot.members.some(m=>m.clientId===intent.clientId&&m.enrollmentId===intent.enrollmentId)) throw protocol();
       expected = ["createEntryExitReview", "com.bowmansystems.sp5.model.client.SpEntryExitReview/594863492"];
     }
     if (stringAt(data[0]) !== moduleBaseUrl || !/^[A-F0-9]{32}$/i.test(stringAt(data[1]) ?? "") || stringAt(data[2]) !== "com.bowmansystems.sp5.core.client.services.GenericService" || stringAt(data[3]) !== expected[0] || data[4] !== String(expected.length - 1) || expected.slice(1).some((type, index) => stringAt(data[5 + index]) !== type)) throw protocol();
     return { url: value.url, headers, body: value.body };
-  } catch { throw protocol(); }
+  } catch(cause) { throw protocol(cause,'request-validation'); }
 }
 
 /** Browser-session helper with read-before-write, freshness checks and no automatic write retries.
@@ -221,7 +227,7 @@ export class GwtEnrollmentHelpers {
   async #read(intent: GwtEnrollmentIntent): Promise<GwtEnrollmentSnapshot> {
     try {
       return validateSnapshot(await this.#options.session.readEnrollment({ clientId: intent.clientId, enrollmentId: intent.enrollmentId }), intent, this.#options.tenant);
-    } catch { throw protocol(); }
+    } catch(cause) { throw protocol(cause,'read'); }
   }
 
   async #execute(intent: GwtEnrollmentIntent): Promise<GwtEnrollmentMutationResult> {
@@ -263,7 +269,7 @@ export class GwtEnrollmentHelpers {
       }
       const startedAt = Date.now();
       let prepared: GwtPreparedEnrollmentMutation;
-      try { prepared = structuredClone(await session.prepare(structuredClone(intent), structuredClone(snapshot))); } catch { throw protocol(); }
+      try { prepared = structuredClone(await session.prepare(structuredClone(intent), structuredClone(snapshot))); } catch(cause) { throw protocol(cause,'prepare'); }
       validateRequest(prepared, intent, snapshot, moduleBaseUrl, startedAt, this.#maxAge);
       const latest = await this.#read(intent);
       if (latest.sessionId !== snapshot.sessionId || latest.revision !== snapshot.revision) throw new GwtEnrollmentConflictError("concurrent-change");

@@ -57,3 +57,15 @@ test('post-write readback rejects cohort date or exit side effects without issui
 test('successful REST acknowledgement with unchanged target is not verification',async()=>{
  const f=fixture();f.api.enrollments.updateEntryAssessment=async input=>{f.calls.push(input);};await assert.rejects(f.port().saveMemberEntryDate(f.input),/target entry date changed unexpectedly/);assert.equal(f.calls.length,1);
 });
+for(const type of ['Basic','Basic Center Program Entry/Exit','HUD','PATH','Quick Call','RHY','Standard','Transitional Living Program Entry/Exit','VA'])test(`member entry date supports UI Entry/Exit type ${type} with an exited cohort member`,async()=>{
+ const f=fixture();f.input.type=type;for(const s of f.snapshots.values())s.enrollmentType=type;
+ f.input.cohort[0].exit.projectExitDate=desired;for(const s of f.snapshots.values())s.exits[0].projectExitDate=desired;
+ await f.port().validateMemberEntryDate(f.input);await f.port().saveMemberEntryDate(f.input);await f.port().saveMemberEntryDate(f.input);
+ assert.equal(f.calls.length,1);assert.equal(f.snapshots.get(1).projectStartDate,initial);assert.equal(f.snapshots.get(1).exits[0].projectExitDate,desired);
+});
+test('planned inputs validate without enrollment IDs or any API access',async()=>{
+ const f=fixture();f.enrollmentSession.readEnrollment=async()=>assert.fail('Plan validation must not read');
+ for(const type of ['Basic','Basic Center Program Entry/Exit','HUD','PATH','Quick Call','RHY','Standard','Transitional Living Program Entry/Exit','VA'])await f.port().validateMemberEntryDatePlan({providerId:99,type,entryDate:desired,memberClientIds:[2],cohortClientIds:[1,2]});
+ assert.throws(()=>f.port().validateMemberEntryDatePlan({providerId:99,type:'unknown',entryDate:desired,memberClientIds:[2],cohortClientIds:[1,2]}),e=>e.code==='MEMBER_ENTRY_DATE_TYPE_UNSUPPORTED'&&e.committed===false);
+ assert.equal(f.calls.length,0);
+});

@@ -1,4 +1,6 @@
 import {apiScope} from './connection.mjs';
+import {entryExitTypes} from './entry-exit-types.mjs';
+import {MemberEntryDateInputError} from './member-entry-date.mjs';
 import {validateBirthDate} from './date-of-birth.mjs';
 import {expectedExitDetails} from './exit-details.mjs';
 import {createEntryCorrector,correctionFailureDetails} from './entry-correction.mjs';
@@ -11,7 +13,6 @@ import {readProgramCatalog,flattenQuestions,createCatalogWriteLabelResolver,enco
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const positive=v=>Number.isSafeInteger(v)&&v>0;
 const validGroupId=v=>positive(v)||typeof v==='string'&&/^[a-zA-Z0-9_-]+$/.test(v);
-const entryExitTypes=['HUD','Basic','Standard','RHY','VA','Basic Center Program Entry/Exit','PATH','Quick Call','Transitional Living Program Entry/Exit'];
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
 const fail=(message,options)=>{throw new EnrollmentWorkflowError(message,{committed:false,...options});};
@@ -120,7 +121,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
  const execute=async(operation,action)=>{
   const state={attempted:false};
   try{return await action(state);}catch(cause){
-   const error=cause instanceof EnrollmentWorkflowError?cause:new EnrollmentWorkflowError(cause instanceof Error?cause.message:'upstream workflow operation failed',{code:cause?.code==='SESSION_INTERRUPTED'?'SESSION_INTERRUPTED':cause?.kind==='validation'?'WORKFLOW_VALIDATION_FAILED':'WORKFLOW_UPSTREAM_FAILURE',...(Array.isArray(cause?.fields)&&cause.fields.every(f=>typeof f==='string')?{fields:cause.fields}:{}),cause});
+   const error=cause instanceof EnrollmentWorkflowError?cause:new EnrollmentWorkflowError(cause instanceof Error?cause.message:'upstream workflow operation failed',{code:cause?.code==='SESSION_INTERRUPTED'?'SESSION_INTERRUPTED':cause?.kind==='validation'?'WORKFLOW_VALIDATION_FAILED':'WORKFLOW_UPSTREAM_FAILURE',...(typeof cause?.step==='string'?{step:cause.step}:{}),...(Array.isArray(cause?.fields)&&cause.fields.every(f=>typeof f==='string')?{fields:cause.fields}:{}),cause});
    if(cause?.code==='SESSION_INTERRUPTED')error.reauthenticated=cause.reauthenticated;
    error.operation=operation;
    error.committed=state.attempted||cause instanceof EnrollmentReadError&&cause.committed==='unknown'||cause?.code==='ENTRY_CORRECTION_UNCERTAIN'?'unknown':false;
@@ -545,12 +546,16 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     for(const clientId of group.clientIds){if(catalog[clientId])fail('duplicate household member enrollment');catalog[clientId]={...group.members[clientId],entryDate:group.members[clientId]?.effectiveDate??group.context.entryDate,entryKey:group.key};}
    }
    if(kind==='addition'){
-    if(typeof memberEntryDatePort?.validateMemberEntryDate!=='function'||typeof memberEntryDatePort?.saveMemberEntryDate!=='function')fail('member entry date port required');
+    if(typeof memberEntryDatePort?.validateMemberEntryDatePlan!=='function'||typeof memberEntryDatePort?.validateMemberEntryDate!=='function'||typeof memberEntryDatePort?.saveMemberEntryDate!=='function')fail('member entry date port required');
     if(ids.some(id=>catalog[id]&&catalog[id].entryKey!==input.key)||ids.includes(input.headClientId))fail('addition requires new household members');
     if(restDate(input.entryDate)<=restDate(entry.context.entryDate))fail('additional member entry must follow original entry');
    }else if(kind!=='entry'&&ids.some(id=>!catalog[id]))fail('verified household entry with identical members required; unknown selected member');
    const cohortIds=[...new Set([...Object.keys(catalog).map(Number),...ids])].sort((a,b)=>a-b);
    const context=kind==='entry'?{householdId:input.householdId,headClientId:input.headClientId,providerId:input.providerId,type:input.type,entryDate:input.entryDate}:kind==='addition'?{...entry.context,entryDate:input.entryDate}:entry.context;
+   if(kind==='addition'){
+    try{await memberEntryDatePort.validateMemberEntryDatePlan({providerId:context.providerId,type:context.type,entryDate:input.entryDate,memberClientIds:[...ids],cohortClientIds:[...cohortIds]});}
+    catch(cause){throw new EnrollmentWorkflowError('member entry date plan rejected',{code:cause instanceof MemberEntryDateInputError?cause.code:'MEMBER_ENTRY_DATE_PREFLIGHT_FAILED',step:'member-entry-date-preflight',...(Array.isArray(cause?.fields)&&cause.fields.every(f=>typeof f==='string')?{fields:cause.fields}:{}),cause});}
+   }
    if(!['entry','addition'].includes(kind)&&ids.some(id=>restDate(input.exitDate??input.reviewDate)<restDate(catalog[id].entryDate)))fail('review precedes entry');
    let nativeGroupId;
    if(!['entry','addition'].includes(kind)){
