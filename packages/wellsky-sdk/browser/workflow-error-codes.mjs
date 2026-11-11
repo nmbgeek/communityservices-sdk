@@ -1,5 +1,8 @@
 // Stable public codes. Keep code values when changing their associated messages.
 const codes = new Map([
+ ["adoption requires the complete linked enrollment cohort", "ADOPTION_COMPLETE_COHORT_REQUIRED"],
+ ["linked household enrollment requires adoptHouseholdEnrollment", "ADOPTION_HOUSEHOLD_REQUIRED"],
+ ["verified step changed", "VERIFIED_STEP_CHANGED"],
  ["DOB and household head corrections require their dedicated workflows", "DOB_AND_HOUSEHOLD_HEAD_CORRECTIONS_REQUIRE_THEIR_DEDICATED_WORKFLOWS"],
  ["DOB helper required for birth-date answers and carry-forward", "DOB_HELPER_REQUIRED_FOR_BIRTH_DATE_ANSWERS_AND_CARRY_FORWARD"],
  ["DOB question type changed", "DOB_QUESTION_TYPE_CHANGED"],

@@ -251,20 +251,20 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    // assessment's own rows. Read at the later of now and the assessment instant.
    const readCurrent=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:new Date(Math.max(Date.now(),Date.parse(at))).toISOString().slice(0,19)+'Z'}}));
    // A generic read at exactly the effective instant returns null for yes/no answers saved at
-   // that instant; one second later returns them. Only the yes/no step needs this.
+   // that instant; one second later returns them. Scalar preflight and verification use this.
    const readSaved=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:new Date(Date.parse(at)+1000).toISOString()}}));
-   const initial=await read();
-   if(!record&&plan.scalar.length){
-    const saved=await readSaved();
+   const assertScalarInsertable=saved=>{
     const existing=plan.scalar.map(q=>({q,row:saved.find(r=>r.virt_field_name===q.virt_field_name)}));
-    const complete=existing.every(({q,row})=>row&&sameAnswer(q,row.answer_value)&&restDate(row.date_effective)===restDate(at));
+    const complete=existing.every(({q,row})=>row&&row.question_type===q.question_type&&sameAnswer(q,row.answer_value)&&restDate(row.date_effective)===restDate(at));
     if(!complete){
      const unavailable=existing.filter(({q,row})=>!row||row.question_type!==q.question_type||row.date_effective!=null&&(!Number.isFinite(restDate(row.date_effective))||restDate(row.date_effective)>restDate(at))||row.date_effective==null&&row.answer_value!=null&&row.answer_value!=='').map(({q})=>q.virt_field_name);
-     if(unavailable.length)fail('mobile scalar preflight unavailable',{code:'MOBILE_PREFLIGHT_UNAVAILABLE',fields:unavailable});
+     if(unavailable.length)fail('mobile scalar preflight unavailable',{code:'MOBILE_PREFLIGHT_UNAVAILABLE',step:'scalars',fields:unavailable});
      const collisions=existing.filter(({row})=>restDate(row.date_effective)===restDate(at)).map(({q})=>q.virt_field_name);
-     if(collisions.length)fail('mobile scalar answer already exists at the effective date',{code:'MOBILE_ANSWER_EXISTS',fields:collisions});
+     if(collisions.length)fail('mobile scalar answer already exists at the effective date',{code:'MOBILE_ANSWER_EXISTS',step:'scalars',fields:collisions});
     }
-   }
+   };
+   const initial=await read();
+   if(!record&&plan.scalar.length)assertScalarInsertable(await readSaved());
    if(expectedHead===input.clientId&&headQuestion)checkHeadAnswer(proposedHead?.answer_value??initial.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH')?.answer_value);
    for(const field of plan.carry.filter(field=>field!=='SVPPROFDOB')){if(kind==='entry'&&record?.correctedScalars?.[field])continue;const q=initial.find(q=>q.virt_field_name===field);if(!q||(q.question_type==='sub_assessment'?!q.sub_assessment_answer_list?.length:!q.answer_value))fail('carry-forward field is empty');}
    // Resend mandatory answers with the standard yes/no write. A blank write must not hide a recorded value.
@@ -370,7 +370,13 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     },()=>api.subassessments.setEndDate({clientId:input.clientId,assessmentCode:code,effectiveDate:at,parentField:end.parentField,recordsetId:end.recordsetId,endDateField:end.endDateField,endDate:end.endDate}));
    }
    if(plan.scalar.length)await step('scalars',async()=>{
-    const source=kind==='entry'&&record.correctedScalars?await readSaved():await read();return {found:plan.scalar.every(original=>{const q=kind==='entry'?record.correctedScalars?.[original.virt_field_name]??original:original,r=source.find(r=>r.virt_field_name===q.virt_field_name);return r&&sameAnswer(q,r.answer_value)&&(q.answer_value===''||restDate(r.date_effective)===restDate(at));}),value:plan.scalar.map(q=>q.virt_field_name)};
+    const source=await readSaved();
+    const found=plan.scalar.every(original=>{const q=kind==='entry'?record.correctedScalars?.[original.virt_field_name]??original:original,r=source.find(r=>r.virt_field_name===q.virt_field_name);return r&&r.question_type===q.question_type&&sameAnswer(q,r.answer_value)&&(q.answer_value===''||restDate(r.date_effective)===restDate(at));});
+    // Enrollment/review creation or another writer can populate shared questions after
+    // initial preflight. Refuse a known collision before journaling this first attempt.
+    // Prior attempts remain reconciliation-only, even when only part of a batch saved.
+    if(!found&&!record.steps.scalars)assertScalarInsertable(source);
+    return {found,value:plan.scalar.map(q=>q.virt_field_name)};
    },()=>api.assessmentsMobile.addAnswer({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at},body:plan.scalar}));
    // Standard writes update existing dated rows and change only the answers sent.
    if(plan.yesNo.length){const body=[...plan.yesNo,...mandatory.map(({expected,...q})=>q)],expected=[...plan.yesNo,...mandatory.map(({expected,...q})=>({...q,answer_value:expected}))];

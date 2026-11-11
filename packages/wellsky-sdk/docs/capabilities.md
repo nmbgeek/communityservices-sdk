@@ -96,7 +96,7 @@ The integrator reports these training-tenant results on November 10 and 11, 2026
 - Three pending 0.5.0 corrections were refused without confirmation and resolved as `rejected` with confirmation.
 - Earlier 0.5.0 runs verified individual/household adoption followed by exit, household re-enrollment after exit, and path corrections in both directions for individuals and households, with no-write same-key repeats.
 
-The integrator has not tested household adoption followed by `createHouseholdInterim`, scalar correction on an adopted enrollment, or a new correction key after resolution. Synthetic tests do not replace that acceptance.
+Further integrator reports in GitLab issues #5, #6 and #7 confirm three additional 0.6.0 paths on November 11: household adoption followed by `createHouseholdInterim` (a session interruption reauthenticated, and a same-key retry verified without a duplicate review); scalar-only correction on an adopted enrollment (same-key retry wrote nothing); and a new correction key after the original correction was resolved as not applied. These are reported live results, not an independent SDK-team rerun. Row corrections on adopted entries require the later `registerEntryRows` API.
 
 The 0.7.0 label resolver, group flags, household discovery, row registration, error codes and mobile collision preflight have local regression coverage, not new live tenant acceptance. In 0.7.0, full write labels remained unresolved for unobserved options; the 0.8.0 catalog reader below removes that limitation when UI catalog access is available. Household discovery refuses ambiguous current-membership matches. Yes/no blanking remains unsupported; no alternative route has been verified.
 

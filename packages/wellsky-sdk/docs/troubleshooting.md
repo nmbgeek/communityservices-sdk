@@ -59,7 +59,7 @@ Enrollment workflow errors expose stable `code` values. Common actionable codes 
 | `MOBILE_ANSWER_EXISTS` | A scalar row already occupies the requested mobile effective instant |
 | `MOBILE_PREFLIGHT_UNAVAILABLE` | The read cannot establish whether a scalar insert is safe |
 
-The [workflow code table](../browser/workflow-error-codes.mjs) maps existing reasons to codes; new guards supply explicit codes. `committed: false` identifies a pre-write refusal for the named operation. `'unknown'` requires journal/readback reconciliation. Resolution errors separately retain `originalCommitted: 'unknown'` for the original correction. HTTP status and causes are exposed where captured; they are not proof of non-application.
+The complete [SDK-owned code inventory](../API.md#enrollment-workflow-errors) is generated from the guards and stable reason map. Generation rejects new constant refusal reasons that have no specific code, including conditional branches. `committed: false` identifies a pre-write refusal for the named operation. `'unknown'` requires journal/readback reconciliation. Resolution errors separately retain `originalCommitted: 'unknown'` for the original correction. HTTP status and causes are exposed where captured; they are not proof of non-application.
 
 Pending 0.5.0 corrections may have no saved `failure` kind or status. Keep your own original failure evidence for the confirmation callback. Do not repeat the write to recover missing diagnostics.
 
