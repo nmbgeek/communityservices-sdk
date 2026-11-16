@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0 - 2026-11-16
+
+- Route Race and Ethnicity enrollment answers through standard REST writes and verify the raw demographic text used by Summary. Add `createRaceEthnicity` for standalone updates and explicit current-answer repair, with durable retries and actual revision timestamps.
+- Refuse Race and Ethnicity in `writeMobileAnswersChecked`; numeric mobile lookup writes can leave the UI blank. Legacy workflow journals require explicit repair before resuming when UI text is missing.
+- Race answers and carry-forward require `readRaceEthnicity`; managed enrollment sessions supply it automatically. Custom readers must return the raw Summary demographic value. Future writes and writes older than the current race answer are refused before submission.
+
 ## 0.11.0 - 2026-11-16
 
 - Add journaled Entry / Exit deletion through the numbered UI confirmation, with provider checks, fresh active-list verification, and reconciliation without automatic resend. Shelter-linked deletion remains unsupported.

@@ -37,3 +37,7 @@ test('checked writer uses the real SDK transport and its configured mobile-only 
  api.fake.set('POST /assessmentsmobile/AddAssessmentAnswer/{clientId}/{assessmentCode}',{kind:'reply',body:[]});
  await writeMobileAnswersChecked(api,input());assert.equal(api.fake.calls.length,2);assert.equal(Date.parse(api.fake.calls[0].query.dateEffective),Date.parse(at)+1000);assert.equal(Date.parse(api.fake.calls[1].query.dateEffective),Date.parse(at)+420*60000);
 });
+test('checked mobile writer refuses Race and Ethnicity before reads or writes',async()=>{
+ const f=fixture(),i=input();i.body=[{question_id:90,question_type:'lookup',virt_field_name:'HUD_RACEETHNICITY',answer_value:'123'}];
+ await assert.rejects(writeMobileAnswersChecked(f.api,i),e=>e.code==='MOBILE_RACE_ETHNICITY_UNSUPPORTED'&&e.committed===false);assert.equal(f.calls.length,0);
+});

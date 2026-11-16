@@ -107,17 +107,35 @@ If an earlier enrollment, review or exit stage was already attempted, this refus
 
 ## Race and ethnicity combinations
 
-`encodeAnswers` recognizes the standard `HUD_RACEETHNICITY` field. It resolves single-category and multiple-category answers to the tenant's `RACE_ETH_COMBO_*` option IDs. A single White answer uses `RACE_ETH_COMBO_WHI`, even when the caller supplies `RACE_ETH_WHI`. Atomic option IDs can read back with a label while appearing blank in the UI.
+Use the enrollment workflow or `createRaceEthnicity` for `HUD_RACEETHNICITY` writes. The standard assessment endpoint populates both the combination lookup and the category-code text used by the Summary and assessment widgets. The mobile endpoint can store the correct lookup while leaving that text empty, including for a single selection. API lookup read-back alone does not verify the UI.
+
+`encodeAnswers` resolves categories to the tenant's `RACE_ETH_COMBO_*` option, including single selections. A single White selection resolves to `RACE_ETH_COMBO_WHI`. Category order is normalized, duplicates are removed, and missing combinations or mixtures with missing-answer states fail validation. Standard encoding requires an exact catalog-backed `writeLabel`; raw labels and numeric IDs are not substitutes for the helper's verification.
 
 ```ts
-const answers = encodeAnswers(definition.questions, {
-  HUD_RACEETHNICITY: {
-    options: [{ code: 'RACE_ETH_HSP' }, { code: 'RACE_ETH_PI' }],
-  },
-}, { endpoint: 'mobile' });
+import {createRaceEthnicity} from '@choiceapps/communityservices-sdk/browser';
+
+const race = createRaceEthnicity({
+  api, enrollmentSession: session.enrollmentSession, store,
+});
+await race.update({
+  key: sourceOperationKey, clientId, assessmentCode, effectiveDate,
+  answer: {options: [{code: 'RACE_ETH_HSP'}, {code: 'RACE_ETH_WHI'}]},
+});
 ```
 
-Category order is normalized and duplicates are removed. Missing combinations and mixtures of categories with missing-answer states fail validation. Names resolve only among combination entries to avoid duplicate-label ambiguity. Other lookup fields keep their existing behavior. Raw methods still send the supplied answer payload; use the encoder rather than hardcoding numeric IDs. Standalone/enrollment encoding still requires `writeLabel` for the resolved combination option.
+The helper discovers current metadata and exact lookup labels, preserves the values of mandatory lookup questions, journals before the standard REST write, and verifies both the lookup and the raw demographic text through the authenticated browser session. It does not require an enrollment. `openEnrollmentSession` supplies the reader; custom readers must implement `readRaceEthnicity` using the raw Summary demographic value, not `getClientQuestionAnswers`, which reconstructs text even for broken answers. Use a dedicated page and a shared durable store. Race updates share the enrollment workflow client lock, including entry corrections. Retain the original key and input when retrying; ambiguous writes are never resent automatically.
+
+To repair the **current** saved selection without choosing a different one, call `race.repair({key, clientId, assessmentCode, effectiveDate})`. Supply the existing answer's effective second. This is explicit maintenance, not an automatic bulk repair. It leaves other assessment values unchanged, but mandatory fields can acquire a new dated revision because the standard endpoint requires them in the request. A same-second race correction can also produce a new server answer ID and a timestamp one millisecond later. The receipt includes both `requestedEffectiveDate` and actual `effectiveDate`; retain the requested value for retries.
+
+Raw demographic verification exposes the current answer. A newer race answer blocks an older correction or write before submission. Future race writes are also refused because the Summary cannot verify them yet. Arbitrary historical repair and blank clearing are unsupported. Use the person's explicit category, doesn't-know, prefers-not-to-answer, or data-not-collected choice. The helper supports lookup mandatory fields; an instrument with another mandatory field type fails before writing.
+
+Enrollment entry, interim, exit, and member-addition plans route Race and Ethnicity through standard writes automatically, independently of `yesNoWrites`. They require an authoritative enrollment reader for race answers and carry-forward. Legacy workflow journals with missing UI text fail with `RACE_ETHNICITY_REPAIR_REQUIRED`; explicitly repair the current answer, then resume with the same workflow key. `correctEntry` also verifies the raw text for race corrections. `writeMobileAnswersChecked` rejects this field with `MOBILE_RACE_ETHNICITY_UNSUPPORTED` before any request. Raw generated REST methods remain low-level and can still reproduce the vendor defect.
+
+See the [typed example](../examples/race-ethnicity.mts) and [declarations](../browser/race-ethnicity.d.mts).
+
+### Sandbox verification, November 16, 2026
+
+Synthetic single- and multiple-selection standard writes populated Summary. The SDK's standalone updater and explicit repair helper independently verified the raw demographic text and visible Summary; same-key repeats returned `already-present`. A mobile-written control reproduced the blank Summary despite a correct lookup. Repair populated the UI and exposed the server's one-millisecond revision in its receipt. The integrated enrollment workflow also populated Summary and repeated without another write. Does-not-know, prefers-not-to-answer, and data-not-collected choices populated Summary through the SDK helper. Existing affected client records were inspected read-only and were not repaired during development.
 
 ## Mobile effective-date correction
 

@@ -10,7 +10,7 @@ export async function openEnrollmentSession({store,...loginOptions}) {
   try {
     const helpers=createPlaywrightEnrollmentHelpers({page:session.page,store,...session.connection});
     const reader=createPlaywrightGwtSession({page:session.page,...session.connection});
-    const enrollmentSession={connection:session.connection,readEnrollment:target=>withPageLock(session.page,()=>reader.readEnrollment(target)),listEnrollments:target=>withPageLock(session.page,()=>reader.listEnrollments(target)),readPicklistOptions:target=>withPageLock(session.page,()=>reader.readPicklistOptions(target))};
+    const enrollmentSession={connection:session.connection,readEnrollment:target=>withPageLock(session.page,()=>reader.readEnrollment(target)),listEnrollments:target=>withPageLock(session.page,()=>reader.listEnrollments(target)),readPicklistOptions:target=>withPageLock(session.page,()=>reader.readPicklistOptions(target)),readRaceEthnicity:target=>withPageLock(session.page,()=>reader.readRaceEthnicity(target))};
     return Object.assign(session,{helpers,enrollmentSession,workflows:createClientWorkflows({page:session.page,store})});
   }catch(error){await session.close();throw error;}
 }
@@ -47,3 +47,5 @@ export * from './current-living-situation.mjs';
 export * from './coordinated-entry-event.mjs';
 
 export {resolveUiConnection} from './connection.mjs';
+
+export {createRaceEthnicity,RaceEthnicityError} from './race-ethnicity.mjs';

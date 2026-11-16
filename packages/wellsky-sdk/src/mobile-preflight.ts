@@ -6,7 +6,7 @@ import {isRecord} from './validation.js';
 
 type RawMobileWrite = Parameters<WellSkyClient['assessmentsMobile']['addAnswer']>[0];
 export type CheckedMobileWriteOptions = Omit<RawMobileWrite,'query'> & {query:{dateEffective:string}};
-export type MobilePreflightCode = 'MOBILE_PREFLIGHT_INPUT_INVALID'|'MOBILE_PREFLIGHT_READ_FAILED'|'MOBILE_PREFLIGHT_UNAVAILABLE'|'MOBILE_ANSWER_EXISTS'|'MOBILE_PREFLIGHT_CANCELLED';
+export type MobilePreflightCode = 'MOBILE_PREFLIGHT_INPUT_INVALID'|'MOBILE_PREFLIGHT_READ_FAILED'|'MOBILE_PREFLIGHT_UNAVAILABLE'|'MOBILE_ANSWER_EXISTS'|'MOBILE_PREFLIGHT_CANCELLED'|'MOBILE_RACE_ETHNICITY_UNSUPPORTED';
 export class MobileAnswerPreflightError extends ValidationError {
  readonly committed=false;
  constructor(readonly code:MobilePreflightCode,fields:readonly string[]=[],cause?:unknown){
@@ -27,6 +27,7 @@ export async function writeMobileAnswersChecked(
  const instant=options.query.dateEffective;
  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.000)?(?:Z|[+-]\d{2}:\d{2})$/.test(instant)||!Number.isFinite(parseRestInstant(instant))||new Date(instant.slice(0,19)+'Z').toISOString().slice(0,19)!==instant.slice(0,19))fail('MOBILE_PREFLIGHT_INPUT_INVALID',['dateEffective']);
  checkSignal();
+ if(options.body.some(q=>q?.virt_field_name==='HUD_RACEETHNICITY'))fail('MOBILE_RACE_ETHNICITY_UNSUPPORTED',['HUD_RACEETHNICITY']);
  const captured={...options,path:{...options.path},query:{...options.query},body:structuredClone(options.body)};
  const scalars:Array<{id:number;field:string;type:string}>=[],seen=new Set<string>(),ids=new Set<number>();
  for(const q of captured.body){

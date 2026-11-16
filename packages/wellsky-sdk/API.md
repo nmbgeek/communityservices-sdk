@@ -197,6 +197,7 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `EXIT_UI_AND_AUTHORITATIVE_ENROLLMENT_SESSION_REQUIRED` | exit UI and authoritative enrollment session required |
 | `EXIT_UI_DESTINATION_AND_REASON_FOR_LEAVING_REQUIRED` | exit UI, destination and reason for leaving required |
 | `EXPLICIT_ENROLLMENT_TARGETS_REQUIRED` | explicit enrollment targets required |
+| `FUTURE_RACE_ETHNICITY_UNSUPPORTED` | future Race and Ethnicity cannot be verified in Summary<br>future race ethnicity unsupported |
 | `HEAD_AND_HOUSEHOLD_MEMBERS_REQUIRED` | head and household members required |
 | `HEAD_CLIENT_ID_REQUIRED` | head client ID required |
 | `HEAD_OF_HOUSEHOLD_ASSESSMENT_OPTION_UNRESOLVED` | head of household assessment option unresolved |
@@ -279,6 +280,8 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `PROGRAM_ASSESSMENT_CONFIGURATION_CHANGED` | program assessment configuration changed |
 | `PROGRAM_ASSESSMENT_DEFAULT_UNRESOLVED` | program assessment default unresolved |
 | `PROVIDER_DISCOVERY_MISMATCH` | provider discovery mismatch |
+| `RACE_ETHNICITY_READER_REQUIRED` | Race and Ethnicity requires a standard writer and authoritative reader<br>race ethnicity reader required |
+| `RACE_ETHNICITY_REPAIR_REQUIRED` | carried Race and Ethnicity requires repair<br>legacy race correction requires explicit repair and reconciliation<br>race ethnicity repair required<br>repair legacy Race and Ethnicity with its existing effective date before resuming |
 | `RECORD_ALREADY_HAS_A_DIFFERENT_END_DATE` | record already has a different end date |
 | `RESOLUTION_EVIDENCE_REFERENCE_CHANGED` | resolution evidence reference changed |
 | `REST_API_DISCOVERY_ENROLLMENT_HELPERS_AND_DURABLE_STORE_REQUIRED` | REST API, discovery, enrollment helpers and durable store required |
@@ -318,6 +321,7 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `UNSUPPORTED_ENTRY_EXIT_TYPE_IN_ASSESSMENT_LOCATIONS` | unsupported Entry/Exit type in assessment locations |
 | `UNSUPPORTED_MANDATORY_CORRECTION_FIELD` | unsupported mandatory correction field |
 | `UNSUPPORTED_MANDATORY_FIELD_TYPE` | unsupported mandatory field type |
+| `UNSUPPORTED_RACE_ETHNICITY_CLEAR` | Race and Ethnicity must use an explicit category or missing-answer state |
 | `UNSUPPORTED_YES_NO_CLEAR` | unsupported yes no clear<br>yes/no answers cannot be cleared |
 | `VERIFIED_CORRECTION_CANNOT_BE_REJECTED` | verified correction cannot be rejected |
 | `VERIFIED_ENROLLMENT_WORKFLOW_REQUIRED` | verified enrollment workflow required |

@@ -1,5 +1,8 @@
 // Stable public codes. Keep code values when changing their associated messages.
 const codes = new Map([
+ ["Race and Ethnicity must use an explicit category or missing-answer state", "UNSUPPORTED_RACE_ETHNICITY_CLEAR"],
+ ["legacy race correction requires explicit repair and reconciliation", "RACE_ETHNICITY_REPAIR_REQUIRED"],
+ ["future Race and Ethnicity cannot be verified in Summary", "FUTURE_RACE_ETHNICITY_UNSUPPORTED"],
  ["adoption requires the complete linked enrollment cohort", "ADOPTION_COMPLETE_COHORT_REQUIRED"],
  ["linked household enrollment requires adoptHouseholdEnrollment", "ADOPTION_HOUSEHOLD_REQUIRED"],
  ["verified step changed", "VERIFIED_STEP_CHANGED"],

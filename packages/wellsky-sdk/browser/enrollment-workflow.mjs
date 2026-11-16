@@ -1,4 +1,5 @@
 import {apiScope} from './connection.mjs';
+import {raceCategoryText,readRaceAnswer,raceAnswerMatches} from './race-ethnicity.mjs';
 import {entryExitTypes} from './entry-exit-types.mjs';
 import {MemberEntryDateInputError} from './member-entry-date.mjs';
 import {validateBirthDate} from './date-of-birth.mjs';
@@ -53,7 +54,14 @@ function compile(definition,input,{yesNoWrites,writeLabel}={}){
  if(!object(answers)||!object(excluded)||!Array.isArray(carry)||!Array.isArray(rows)||!Array.isArray(ends)||new Set(carry).size!==carry.length)fail('invalid assessment plan');
  const encoded=encodeAnswers(definition.questions,answers,{endpoint:'mobile'}),index=new Map(definition.questions.map(q=>[q.fieldName,q]));
  // Mobile writes store empty yes/no values, so the standard endpoint can own them instead.
- const yesNo=yesNoWrites==='standard'?encoded.filter(q=>q.question_type==='yes_no'):[],scalar=encoded.filter(q=>!yesNo.includes(q));
+ const yesNo=yesNoWrites==='standard'?encoded.filter(q=>q.question_type==='yes_no'):[];
+ const raceValue=encoded.find(q=>q.virt_field_name==='HUD_RACEETHNICITY'),scalar=encoded.filter(q=>!yesNo.includes(q)&&q!==raceValue);
+ let race;
+ if(raceValue){
+  const question=index.get('HUD_RACEETHNICITY'),option=question.options.find(o=>String(o.id)===raceValue.answer_value);
+  const [body]=encodeAnswers(definition.questions,{HUD_RACEETHNICITY:answers.HUD_RACEETHNICITY},{endpoint:'standalone',writeLabel});
+  race={body,expected:raceValue,optionId:option.id,categoryText:raceCategoryText(option)};
+ }
  for(const [field,reason]of Object.entries(excluded))if(!index.has(field)||typeof reason!=='string'||!reason.trim())fail('not-applicable explanation required');
  for(const field of carry)if(typeof field!=='string'||!index.has(field))fail('unknown carry-forward field');
  const keys=new Set(),semantics=new Set();
@@ -84,8 +92,8 @@ function compile(definition,input,{yesNoWrites,writeLabel}={}){
  // The standard endpoint rejects a request that omits any mandatory answer, even one already
  // recorded at that date. Resolve every label now so no write precedes a missing label.
  const mandatory=[];
- if(yesNo.length)for(const q of definition.questions){
-  if(!q.mandatory||['blank','label','sub_assessment'].includes(q.questionType)||yesNo.some(y=>y.virt_field_name===q.fieldName))continue;
+ if(yesNo.length||race)for(const q of definition.questions){
+  if(!q.mandatory||['blank','label','sub_assessment'].includes(q.questionType)||yesNo.some(y=>y.virt_field_name===q.fieldName)||race&&q.fieldName==='HUD_RACEETHNICITY')continue;
   // Only mandatory lookups were verified live; this also keeps DOB inside its own helper.
   if(q.questionType!=='lookup')fail(`standard yes/no writes support mandatory lookups only; ${q.fieldName} is ${q.questionType}`,{code:'UNSUPPORTED_MANDATORY_FIELD_TYPE',fields:[q.fieldName??String(q.questionId)]});
   const base={question_id:q.questionId,question_type:q.questionType,virt_field_name:q.fieldName};
@@ -97,7 +105,7 @@ function compile(definition,input,{yesNoWrites,writeLabel}={}){
   }else if(q.fieldName in excluded)mandatory.push({...base,answer_value:'',expected:''});
   else if(carry.includes(q.fieldName))mandatory.push({...base,carry:true});
  }
- return {scalar:scalar.filter(q=>q.virt_field_name!=='SVPPROFDOB'),yesNo,mandatory,dateOfBirth:birthDate?.answer_value,rows:compiledRows,ends:compiledEnds,carry,excluded};
+ return {scalar:scalar.filter(q=>q.virt_field_name!=='SVPPROFDOB'),yesNo,race,mandatory,dateOfBirth:birthDate?.answer_value,rows:compiledRows,ends:compiledEnds,carry,excluded};
 }
 async function enrollments(api,clientId,{enrollmentSession,writeAttempted=false}={}){
  const gwt=typeof enrollmentSession?.listEnrollments==='function';
@@ -221,6 +229,17 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(record&&kind==='exit'&&record.exitSchemaHash!==exitSchemaHash)fail('exit assessment configuration changed');
    const operationWriteLabel=writeLabel??(discovered.picklistOptions?createCatalogWriteLabelResolver(definition,discovered.picklistOptions):undefined);
    const plan=compile(definition,input.assessment,{yesNoWrites,writeLabel:operationWriteLabel});
+   const raceQuestion=definition.questions.find(q=>q.fieldName==='HUD_RACEETHNICITY');
+   const raceTarget=raceQuestion?{clientId:input.clientId,questionId:raceQuestion.questionId}:null;
+   const correctedRace=kind==='entry'?record?.correctedScalars?.HUD_RACEETHNICITY:undefined;
+   const correctedRaceOption=correctedRace?raceQuestion?.options.find(o=>String(o.id)===correctedRace.answer_value):undefined;
+   const expectedRace=correctedRace?{optionId:correctedRaceOption?.id,categoryText:raceCategoryText(correctedRaceOption)}:plan.race;
+   if(plan.race||plan.carry.includes('HUD_RACEETHNICITY')){
+    if(plan.race&&Date.parse(at)>Date.now())fail('future Race and Ethnicity cannot be verified in Summary',{code:'FUTURE_RACE_ETHNICITY_UNSUPPORTED'});
+    if(typeof enrollmentSession?.readRaceEthnicity!=='function'||typeof api.assessments.create!=='function')fail('Race and Ethnicity requires a standard writer and authoritative reader',{code:'RACE_ETHNICITY_READER_REQUIRED',fields:['HUD_RACEETHNICITY']});
+    const stored=await readRaceAnswer(enrollmentSession,api.tenant,raceTarget,at);
+    if(plan.race&&record&&!record.raceWrites&&!raceAnswerMatches(stored,expectedRace,at))fail('repair legacy Race and Ethnicity with its existing effective date before resuming',{code:'RACE_ETHNICITY_REPAIR_REQUIRED',fields:['HUD_RACEETHNICITY']});
+   }
    const carriesBirthDate=plan.carry.includes('SVPPROFDOB'),hasBirthDate=plan.dateOfBirth!==undefined||carriesBirthDate;
    let carriedBirthDate;
    if(hasBirthDate){
@@ -269,6 +288,11 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(!record&&plan.scalar.length)assertScalarInsertable(await readSaved());
    if(expectedHead===input.clientId&&headQuestion)checkHeadAnswer(proposedHead?.answer_value??initial.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH')?.answer_value);
    for(const field of plan.carry.filter(field=>field!=='SVPPROFDOB')){if(kind==='entry'&&record?.correctedScalars?.[field])continue;const q=initial.find(q=>q.virt_field_name===field);if(!q||(q.question_type==='sub_assessment'?!q.sub_assessment_answer_list?.length:!q.answer_value))fail('carry-forward field is empty');}
+   if(plan.carry.includes('HUD_RACEETHNICITY')){
+    const prior=initial.find(q=>q.virt_field_name==='HUD_RACEETHNICITY'),option=raceQuestion.options.find(o=>String(o.id)===String(prior?.answer_value));
+    const stored=await readRaceAnswer(enrollmentSession,api.tenant,raceTarget,at);
+    if(!option||!raceAnswerMatches(stored,{optionId:option.id,categoryText:raceCategoryText(option)},prior.date_effective))fail('carried Race and Ethnicity requires repair',{code:'RACE_ETHNICITY_REPAIR_REQUIRED',fields:['HUD_RACEETHNICITY']});
+   }
    // Resend mandatory answers with the standard yes/no write. A blank write must not hide a recorded value.
    const mandatory=plan.mandatory.map(m=>{
     const corrected=kind==='entry'?record?.correctedScalars?.[m.virt_field_name]:undefined;
@@ -307,7 +331,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    }
    if(internal.preflight)return {assessmentCode:code,...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
    const wasVerified=record?.stage==='verified';
-   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
+   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const step=async(name,inspect,submit)=>{
     let result=await inspect();const previous=record.steps[name];
@@ -380,10 +404,16 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     if(!found&&!record.steps.scalars)assertScalarInsertable(source);
     return {found,value:plan.scalar.map(q=>q.virt_field_name)};
    },()=>api.assessmentsMobile.addAnswer({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at},body:plan.scalar}));
-   // Standard writes update existing dated rows and change only the answers sent.
-   if(plan.yesNo.length){const body=[...plan.yesNo,...mandatory.map(({expected,...q})=>q)],expected=[...plan.yesNo,...mandatory.map(({expected,...q})=>({...q,answer_value:expected}))];
-    await step('yesno',async()=>{
-     const source=await readSaved();return {found:expected.every(original=>{const q=kind==='entry'?record.correctedScalars?.[original.virt_field_name]??original:original,r=source.find(r=>r.virt_field_name===q.virt_field_name);return r&&sameAnswer(q,r.answer_value)&&(q.answer_value===''||restDate(r.date_effective)===restDate(at));}),value:plan.yesNo.map(q=>q.virt_field_name)};
+   // Race needs the standard endpoint's category text as well as its combination lookup.
+   if(plan.yesNo.length||plan.race){
+    const body=[...plan.yesNo,...(plan.race?[plan.race.body]:[]),...mandatory.map(({expected,...q})=>q)];
+    const expected=[...plan.yesNo,...(plan.race?[plan.race.expected]:[]),...mandatory.map(({expected,...q})=>({...q,answer_value:expected}))];
+    await step(plan.yesNo.length?'yesno':'raceEthnicity',async()=>{
+     const source=await readSaved();let found=expected.every(original=>{const q=kind==='entry'?record.correctedScalars?.[original.virt_field_name]??original:original,r=source.find(r=>r.virt_field_name===q.virt_field_name);return r&&sameAnswer(q,r.answer_value)&&(q.answer_value===''||restDate(r.date_effective)===restDate(at));});
+     if(plan.race){
+      found=raceAnswerMatches(await readRaceAnswer(enrollmentSession,api.tenant,raceTarget,at),expectedRace,at)&&found;
+     }
+     return {found,value:[...plan.yesNo.map(q=>q.virt_field_name),...(plan.race?['HUD_RACEETHNICITY']:[])]};
     },()=>api.assessments.create({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at},body}));
    }
    // Group rows into one creation request. Partial success blocks resubmission until all rows reconcile.

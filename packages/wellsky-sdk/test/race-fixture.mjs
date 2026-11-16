@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {createEnrollmentWorkflow} from '@choiceapps/communityservices-sdk/browser';
+const tenant='race-fixture',at='2026-11-16T12:00:00Z';
+const options=[['RACE_ETH_WHI','White'],['RACE_ETH_COMBO_WHI','White'],['RACE_ETH_COMBO_ASN_MES','Asian; Middle Eastern']].map(([code,name],i)=>({id:i+10,picklistId:1,picklistCode:'RACE',code,name,displayOrder:i,hudVisibility:2}));
+const race={questionId:1,fieldName:'HUD_RACEETHNICITY',questionType:'lookup',description:'Race',mandatory:false,showOnPrevious:true,displayOrder:1,picklistId:1,options,children:[]};
+const required={...race,questionId:2,fieldName:'REQUIRED',mandatory:true,options:[{...options[0],id:20,code:'KEEP',name:'Keep this'}]};
+export function raceFixture(faults={}){
+ const history=[],entries=[],journals=new Map(),calls=[];
+ const read=date=>[race,required].map(q=>{const h=history.filter(h=>h.field===q.fieldName&&Date.parse(h.date)<=Date.parse(date??'9999-01-01')).at(-1);return {question_id:q.questionId,question_type:'lookup',virt_field_name:q.fieldName,answer_value:h?.id??null,date_effective:h?.date??null};});
+ const store={withLock:async(_,fn)=>fn(),read:async s=>structuredClone(journals.get(s)??[]),write:async(s,v)=>journals.set(s,structuredClone(v))};
+ const api={tenant,clients:{get:async()=>({clientId:1,isActive:true})},providers:{list:async()=>({count:1,values:[{providerId:2,providerName:'Synthetic',active:true,operational:true,hudCompliant:true,parentProviderID:null,providerGrantType:null,dateAdded:'2026-01-01',dateUpdated:'2026-01-01'}]})},enrollments:{listForClient:async()=>({count:entries.length,values:entries}),createEntryAssessment:async({body})=>{calls.push('entry');entries.push({enrollmentId:50,clientId:1,enrollmentProvider:2,type:'HUD',projectStartDate:body.projectStartDate,isActive:true});return entries[0];}},assessments:{getDefinition:async({assessmentCode})=>({tenant,assessmentCode,questions:[race,required],unresolvedPicklists:[],retrievedAt:at,picklistEffectiveDate:'current'}),get:async({query}={})=>read(query?.dateEffective),create:async({body,query})=>{
+  calls.push({method:'standard',body});if(faults.noCommit)throw Error('lost response');
+  for(const q of body){const source=q.virt_field_name===race.fieldName?race:required;const o=source.options.find(o=>o.name===q.answer_value&&(source!==race||o.code.startsWith('RACE_ETH_COMBO_')));assert.ok(o);const existing=history.find(h=>h.field===q.virt_field_name&&Date.parse(h.date)===Date.parse(query.dateEffective));const value={answerId:existing?.answerId??100+history.length,field:q.virt_field_name,id:String(o.id),text:source===race&&!faults.badText?o.code.slice(15).replaceAll('_',','):'',date:query.dateEffective};if(existing)Object.assign(existing,value);else history.push(value);}
+  if(faults.lostResponse)throw Error('lost response');return [];
+ }},assessmentsMobile:{addAnswer:async({body,query})=>{calls.push({method:'mobile',body});for(const q of body)history.push({answerId:100+history.length,field:q.virt_field_name,id:q.answer_value,text:'',date:query.dateEffective});return [];}},subassessments:{}};
+ const reader={readRaceEthnicity:async({clientId,questionId})=>{if(faults.readFails)throw Error('GWT unavailable');return {source:'gwt-rpc',tenant,clientId,questionId,answers:history.filter(h=>h.field===race.fieldName).sort((a,b)=>Date.parse(b.date)-Date.parse(a.date)).slice(0,1).map(h=>({answerId:h.answerId,clientId,questionId,effectiveDate:h.date,optionId:Number(h.id),categoryText:h.text}))};}};
+ const discovery={getProviderAssessments:async()=>({providerId:2,defaults:['entry','interim'].map((phase,i)=>({location:i?'showHudInterim':'showHudEntry',resolution:'resolved',assessment:{assessmentId:i+1,code:phase.toUpperCase(),name:phase,assignedToAssessmentTab:true}}))})};
+ const input={key:'entry',clientId:1,providerId:2,type:'HUD',entryDate:at,assessment:{answers:{HUD_RACEETHNICITY:{option:{code:'RACE_ETH_WHI'}},REQUIRED:{option:{code:'KEEP'}}}}};
+ const workflow=()=>createEnrollmentWorkflow({api,store,discovery,helpers:{createInterimUpdate:async()=>({})},enrollmentSession:reader,writeLabel:(_q,o)=>o.name});
+ return {api,store,reader,discovery,history,journals,calls,input,workflow,faults};
+}

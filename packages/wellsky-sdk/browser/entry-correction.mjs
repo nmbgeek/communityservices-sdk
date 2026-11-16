@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {raceCategoryText,readRaceAnswer} from './race-ethnicity.mjs';
 import {createCatalogWriteLabelResolver,encodeAnswers,parseRestInstant,toItems} from '../dist/esm/index.js';
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -95,6 +96,11 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    const schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
    if(schemaHash!==entry.schemaHash||record&&schemaHash!==record.schemaHash)fail('program assessment configuration changed');
    const definition=discovered.entry.definition,operationWriteLabel=writeLabel??(discovered.picklistOptions?createCatalogWriteLabelResolver(discovered.entry.definition,discovered.picklistOptions):undefined),code=definition.assessmentCode;
+   const raceQuestion=definition.questions.find(q=>q.fieldName==='HUD_RACEETHNICITY');
+   const checksRace=Object.hasOwn(input.answers??{},'HUD_RACEETHNICITY')||(input.clear??[]).includes('HUD_RACEETHNICITY')||raceQuestion?.mandatory;
+   if((input.clear??[]).includes('HUD_RACEETHNICITY'))fail('Race and Ethnicity must use an explicit category or missing-answer state');
+   if(checksRace&&record&&record.before.scalars.HUD_RACEETHNICITY?.categoryText===undefined)fail('legacy race correction requires explicit repair and reconciliation');
+   if(checksRace&&parseRestInstant(at)>Date.now())fail('future Race and Ethnicity cannot be verified in Summary');
    const snapshot=async()=>{
     const raw=await readQuestions(input.clientId,code,readAt),current=await readQuestions(input.clientId,code,new Date(Math.max(Date.now(),parseRestInstant(readAt))).toISOString());
     const scalars={},rows={};
@@ -104,6 +110,10 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
       const actual=raw.find(r=>r.virt_field_name===q.fieldName);if(!actual)fail('correction scalar read missing');
       const date=actual.date_effective?parseRestInstant(actual.date_effective):null;if(date!==null&&!Number.isFinite(date))fail('invalid correction effective date');
       scalars[q.fieldName]={type:q.questionType,value:value(q.questionType,actual.answer_value),date};
+      if(checksRace&&q.fieldName==='HUD_RACEETHNICITY'){
+       const stored=await readRaceAnswer(enrollmentSession,api.tenant,{clientId:input.clientId,questionId:q.questionId},at);
+       scalars[q.fieldName].categoryText=stored?.categoryText??null;
+      }
       continue;
      }
      const parent=current.find(r=>r.virt_field_name===q.fieldName);if(!parent||!Array.isArray(parent.sub_assessment_answer_list??[]))fail('correction subassessment read missing');
@@ -174,9 +184,12 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const inspect=async(candidate,complete=false)=>{
     const state=await snapshot(),want=structuredClone(record.before);
-    if(complete||candidate==='scalars'||record.steps.scalars?.state==='verified')for(const q of record.scalarExpected)want.scalars[q.virt_field_name]={type:q.question_type,value:value(q.question_type,q.answer_value),date:parseRestInstant(at)};
+    if(complete||candidate==='scalars'||record.steps.scalars?.state==='verified')for(const q of record.scalarExpected){
+     want.scalars[q.virt_field_name]={type:q.question_type,value:value(q.question_type,q.answer_value),date:parseRestInstant(at)};
+     if(checksRace&&q.virt_field_name==='HUD_RACEETHNICITY')want.scalars[q.virt_field_name].categoryText=raceCategoryText(raceQuestion.options.find(o=>String(o.id)===String(q.answer_value)));
+    }
     for(const plan of record.rowPlans)if(complete||candidate==='row:'+plan.id||record.steps['row:'+plan.id]?.state==='verified')for(const q of plan.cells)want.rows[plan.parentField][plan.id][q.virt_field_name]={type:q.question_type,value:value(q.question_type,q.answer_value)};
-    const scalarsMatch=Object.keys(state.scalars).length===Object.keys(want.scalars).length&&Object.entries(want.scalars).every(([field,e])=>{const a=state.scalars[field];return a&&a.type===e.type&&a.value===e.value&&(e.value===null||a.date===e.date);});
+    const scalarsMatch=Object.keys(state.scalars).length===Object.keys(want.scalars).length&&Object.entries(want.scalars).every(([field,e])=>{const a=state.scalars[field];return a&&a.type===e.type&&a.value===e.value&&(e.value===null||a.date===e.date)&&(!Object.hasOwn(e,'categoryText')||a.categoryText===e.categoryText);});
     return scalarsMatch&&canonical(state.rows)===canonical(want.rows);
    };
    const step=async(name,submit)=>{

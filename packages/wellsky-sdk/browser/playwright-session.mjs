@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {GwtEnrollmentHelpers} from '../dist/esm/index.js';
 import {decodeMappedResponse} from './gwt-mapped.mjs';
+import {decodeRaceDemographics} from './gwt-race.mjs';
 
 import {withPageLock} from './page-lock.mjs';
 import {sessionGeneration} from './session-authentication.mjs';
@@ -124,6 +125,16 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     }
     return {source:'gwt-rpc',tenant,clientId,count:rows.length,values:rows.map(row=>({...row,isActive:true,grouped:row.groupId!==null}))};
   };
+  const readRaceEthnicity=async({clientId,questionId})=>{
+    id(clientId);id(questionId);await openReadContext(clientId);
+    const strings=[moduleBaseUrl,wire.policy,rpcInterface,'getBasicClientDemographicInfo','I'];
+    const body=['7','0',strings.length,...strings,1,2,3,4,1,5,clientId,''].join('|');
+    const response=await post({url:moduleBaseUrl+'service/ClientService',headers:wire.headers,body});
+    if(response.status!==200)throw Error('Race and Ethnicity demographic read failed');
+    const row=decodeRaceDemographics(response.body);
+    if(row&&(row.clientId!==clientId||row.questionId!==questionId||!row.active))throw Error('Race and Ethnicity demographic identity mismatch');
+    return {source:'gwt-rpc',tenant,clientId,questionId,answers:row?[{answerId:row.answerId,clientId,questionId,effectiveDate:row.effectiveDate,optionId:row.optionId,categoryText:row.categoryText}]:[]};
+  };
   const readPicklistOptions=async({clientId,optionIds})=>{
     id(clientId);if(!Array.isArray(optionIds)||optionIds.length>10000)throw Error('Invalid picklist option IDs');
     const ids=[...new Set(optionIds.map(id))].sort((a,b)=>a-b),values=[];
@@ -231,7 +242,7 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
     try{await save.click();const result=await Promise.race([captured,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),15000);})]);if(!result)throw Error('Expected mutation was not captured');pending=digest(JSON.stringify({url:result.url,headers:result.headers,body:result.body}));return result;}
     finally{clearTimeout(timer);await page.unroute('**/service/**',handler);await ready();await closeDialogs();}
   };
-  return {connection:resolveUiConnection({tenant,moduleBaseUrl}),readEnrollment,listEnrollments,readPicklistOptions,prepare,async send(request){
+  return {connection:resolveUiConnection({tenant,moduleBaseUrl}),readEnrollment,listEnrollments,readPicklistOptions,readRaceEthnicity,prepare,async send(request){
     checkGeneration();const fingerprint=digest(JSON.stringify(request));if(!pending||fingerprint!==pending)throw Error('Only the newly prepared request can be sent once');pending=undefined;return post(request);
   }};
 }

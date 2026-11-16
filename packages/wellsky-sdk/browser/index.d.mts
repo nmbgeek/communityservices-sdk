@@ -29,7 +29,13 @@ export interface EnrollmentListRow {
 export interface EnrollmentListSnapshot {
  source:'gwt-rpc';tenant:string;clientId:number;count:number;values:EnrollmentListRow[];
 }
+export interface RaceEthnicityHistory {
+ source:'gwt-rpc';tenant:string;clientId:number;questionId:number;
+ answers:Array<{answerId:number;clientId:number;questionId:number;effectiveDate:string;optionId:number|null;categoryText:string}>;
+}
 export interface EnrollmentReader {
+  /** Current raw demographic answer used by Summary. Earlier answers are not projected as verified. */
+  readRaceEthnicity?(target:{clientId:number;questionId:number}):Promise<RaceEthnicityHistory>;
   readonly connection?:UiConnection;
   /** Exact full names for explicit REST option IDs; does not read existing answers. */
   readPicklistOptions?(target:{clientId:number;optionIds:readonly number[]}):Promise<PicklistCatalogSnapshot>;
@@ -39,6 +45,7 @@ export interface EnrollmentReader {
   listEnrollments?(target:{clientId:number}):Promise<EnrollmentListSnapshot>;
 }
 export interface EnrollmentCatalogReader extends EnrollmentReader {
+ readRaceEthnicity(target:{clientId:number;questionId:number}):Promise<RaceEthnicityHistory>;
  readPicklistOptions(target:{clientId:number;optionIds:readonly number[]}):Promise<PicklistCatalogSnapshot>;
  listEnrollments(target:{clientId:number}):Promise<EnrollmentListSnapshot>;
 }
@@ -99,3 +106,5 @@ export * from './coordinated-entry-event.mjs';
 
 export {resolveUiConnection} from './connection.mjs';
 export type {UiConnection,UiConnectionOptions} from './connection.mjs';
+
+export * from './race-ethnicity.mjs';

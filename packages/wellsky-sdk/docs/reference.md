@@ -71,3 +71,7 @@ See [shelter contracts](../browser/shelters.d.mts), [shelter workflow](shelters.
 ## Entry / Exit deletion
 
 `createEnrollmentDeletion`, `createEnrollmentDeletionUi`, and `EnrollmentDeletionError`: [deletion contract](enrollments.md#delete-an-entry--exit), [declarations](../browser/enrollment-deletion.d.mts). `deleteEnrollment` confirms the selected record's UI deletion, journals before confirmation, and verifies absence through fresh active enrollment reads.
+
+## Race and Ethnicity
+
+`createRaceEthnicity` and `RaceEthnicityError`: [write and repair contracts](assessments.md#race-and-ethnicity-combinations), [declarations](../browser/race-ethnicity.d.mts). `update` writes explicit selections; `repair` retains the current selection. Managed enrollment sessions supply `readRaceEthnicity` for raw demographic verification.

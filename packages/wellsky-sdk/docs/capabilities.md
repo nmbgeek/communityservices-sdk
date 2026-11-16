@@ -26,6 +26,7 @@ The generated client covers the pinned V2/V3 Swagger operations. The following f
 | Head of household | Enrollment workflow guards | Missing or mid-enrollment replacement head rejected. Head cannot exit before remaining members. Retroactive replacement is not implemented |
 | Verification records at entry | `readEnrollmentVerifications` | Reads generic assessment and filters intervals; complete-enrollment entry arrays can omit valid UI rows |
 | Existing verification end dates | `api.subassessments.setEndDate` | Preserves row ID and other values, verifies result; no blind resend or delete/recreate |
+| Race and Ethnicity | `createRaceEthnicity`, enrollment workflow | Standard REST writes plus raw demographic verification; single/multiple selections and explicit current-answer repair verified in a sandbox November 16, 2026. Newer answers and future dates block writes. |
 | Client Record fields | `createClientProfile` | Names, SSN, quality, veteran fields via preserved REST update; Sex via UI. Legacy Gender is not Sex |
 | DOB | `createDateOfBirth`, workflow `birthDates` | Calendar-date encoding, UI/API agreement, same-entry timestamp correction via UI; no arbitrary historical correction |
 | Independent needs | `createNeedRecorder`, `createNeedUi` | Add Need form, explicit status/outcome, durable key, no service/referral creation |

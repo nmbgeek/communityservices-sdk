@@ -250,7 +250,8 @@ export interface EnrollmentWorkflowOptions {
   store:UiMutationStore;
   /** Required for SVPPROFDOB answers or carry-forward. Share this workflow's durable store. */
   birthDates?:DateOfBirth;
-  /** Required for exits and household operations. Household creation/additions also need api.households and helpers.addHouseholdMembers; native-linked adoption/reviews/exits do not. */
+  /** Race and Ethnicity answers/carry-forward require readRaceEthnicity.
+   * Required for exits and household operations. Household creation/additions also need api.households and helpers.addHouseholdMembers; native-linked adoption/reviews/exits do not. */
   enrollmentSession?:EnrollmentReader;
   /** Required for exitEnrollment and exitHousehold; the workflow owns its durable write journal. */
   exitUi?:HouseholdExitUi;
