@@ -82,6 +82,7 @@ export * from './enrollment-workflow.mjs';
 export {entryExitTypes} from './entry-exit-types.mjs';
 export * from './member-entry-date.mjs';
 export * from './household-exit.mjs';
+export * from './enrollment-deletion.mjs';
 
 export class SessionInterruptedError extends Error {readonly code:'SESSION_INTERRUPTED';readonly reauthenticated:boolean;readonly status?:number;readonly authenticationStatus?:number;readonly step?:string;readonly reauthenticationCause?:unknown;constructor(reauthenticated:boolean,options?:ErrorOptions&{authenticationStatus?:number;reauthenticationCause?:unknown});}
 export * from './client-profile.mjs';

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.0 - 2026-11-16
+
+- Add journaled Entry / Exit deletion through the numbered UI confirmation, with provider checks, fresh active-list verification, and reconciliation without automatic resend. Shelter-linked deletion remains unsupported.
+
+
 ## 0.10.0 - 2026-11-11
 
 - Share all nine UI Entry/Exit types between enrollment workflows and the member-entry-date port; remove the port's stale HUD/VA-only restriction.

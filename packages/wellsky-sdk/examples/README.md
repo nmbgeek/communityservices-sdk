@@ -48,3 +48,5 @@ Installed checks also run the client-creation, attachment-retry, session-authent
 [coordinated-entry-events.mts](coordinated-entry-events.mts) records application-supplied Coordinated Entry Events with durable keys, verified lookup labels, and event-specific follow-up answers such as referral locations and results. It compiles against the installed package without opening a live session.
 
 [current-living-situation.mts](current-living-situation.mts) records application-supplied outreach or night-by-night shelter contact events with distinct durable keys and optional recording-program picklist selections. It compiles and imports against the installed package without opening a live session.
+
+- [Entry / Exit deletion](enrollment-deletion.mts): delete an authorized record through its numbered UI confirmation with a durable journal.

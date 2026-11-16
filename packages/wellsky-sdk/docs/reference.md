@@ -67,3 +67,7 @@ See [shelter contracts](../browser/shelters.d.mts), [shelter workflow](shelters.
 ### Coordinated Entry Events
 
 `createCoordinatedEntryEventRecorder` and `CoordinatedEntryEventConflictError`: [event guide](coordinated-entry-events.md), [declarations](../browser/coordinated-entry-event.d.mts). `record` creates one journaled CE Event row per event key through the standard assessment endpoint and verifies every answer, including provider locations and yes/no results.
+
+## Entry / Exit deletion
+
+`createEnrollmentDeletion`, `createEnrollmentDeletionUi`, and `EnrollmentDeletionError`: [deletion contract](enrollments.md#delete-an-entry--exit), [declarations](../browser/enrollment-deletion.d.mts). `deleteEnrollment` confirms the selected record's UI deletion, journals before confirmation, and verifies absence through fresh active enrollment reads.

@@ -419,3 +419,48 @@ For a 0.9.1 non-HUD/VA addition that attached the member and then failed the typ
 ## Current Living Situation contacts
 
 For street outreach and night-by-night shelter meaningful contacts, use the [Current Living Situation recorder](current-living-situation.md). Start always comes from program entry, information date comes from the contact, and end may be empty. Generic `subassessments` plans do not infer these event rules and can adopt an existing semantically matching row. They are not a distinct-contact recorder. Do not use the income replacement example to close or replace CLS contact history.
+
+## Delete an Entry / Exit
+
+Use `createEnrollmentDeletion` with `createEnrollmentDeletionUi` to delete one explicitly selected Entry / Exit record. WellSky calls this deleting in the UI; it marks the record inactive and hides it. This is separate from recording an exit date.
+
+```ts
+import {
+  createEnrollmentDeletion, createEnrollmentDeletionUi,
+  createFileGwtMutationStore,
+} from '@choiceapps/communityservices-sdk/browser';
+
+const deletion = createEnrollmentDeletion({
+  ui: createEnrollmentDeletionUi({page: session.page}),
+  store: createFileGwtMutationStore(privateJournalDirectory),
+});
+const result = await deletion.deleteEnrollment({
+  key: sourceDeletionKey,
+  clientId,
+  enrollmentId,
+  providerId,
+});
+```
+
+The helper checks a complete active enrollment list, the provider, and the displayed client. It clicks the exact trash icon and accepts only the numbered "Please Confirm" prompt for that enrollment. It writes the durable journal before clicking Yes. WellSky generates the delete request through its own UI; the SDK does not replay captured GWT-RPC mutations. Fresh GWT-RPC reads verify that the target is absent and the client's other previously active enrollments remain present.
+
+Keep the same key, input, and journal when resuming. The key is scoped to the client and deployment. Deletions for a client share a durable lock, and the built-in UI port holds the page lock throughout the operation. An unresolved attempt blocks another confirmation, including one with a new key for the same enrollment. If a fresh read finds the target absent, the original attempt can reconcile without a write. A failed read never proves deletion.
+
+| Outcome | Meaning |
+| --- | --- |
+| `deleted` | One confirmation completed and fresh reads verified absence |
+| `reconciled` | A pending or interrupted confirmation was resolved by fresh reads |
+| `already-deleted` | The journal already recorded verified deletion and a fresh read still finds it absent |
+| `already-absent` | The first read found no active target; no deletion was attempted and no prior deletion is claimed |
+
+`EnrollmentDeletionError` has code `ENROLLMENT_DELETION_CONFLICT` and a `reason`, such as `provider-mismatch`, `intent-changed`, `unresolved-delete`, `record-reappeared`, or `unsupported-confirmation`. Transport and session failures can also propagate. Inspect pending attempts before taking any manual recovery action. Do not discard a journal to bypass an unresolved attempt.
+
+Shelter-linked confirmation dialogs are rejected because they use a separate operation with additional effects. The helper deletes one selected record; it does not offer a household-wide delete or restore. Existing enrollment-workflow journals are retained and are not rewritten as active enrollments. External writers are not covered by the SDK's locks.
+
+See the [public-import example](../examples/enrollment-deletion.mts) and [declarations](../browser/enrollment-deletion.d.mts).
+
+### Deletion verification, November 16, 2026
+
+A live sandbox check deleted one open, standalone Standard enrollment through the built-in UI port. The UI emitted exactly one `deleteEntryExit` request. Fresh counted GWT reads showed one fewer active enrollment, preserved the client's other enrollment, and the deleted record's trash icon was absent. Recreating the helper with the same journal and key returned `already-deleted` without another delete request. Preparation checks confirmed the actual popup uses `role="alertdialog"`, the title "Please Confirm", the numbered prompt, and Yes/No controls.
+
+This verifies the tested standalone Standard path. It does not establish live behavior for household-linked records, other Entry / Exit types, exited records, or shelter-linked deletion. Local regressions cover interrupted responses, failed reads, mismatched context, changed intent, persistent journals, and confirmation refusal.
