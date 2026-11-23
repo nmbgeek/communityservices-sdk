@@ -15,7 +15,7 @@ function fixture({type='Standard',target=1,implicit=false,forceMethod}={}){
  const locator=selector=>{
   if(selector.includes('HouseholdsCheckboxTree'))return boxLocator(selector);
   const id=selector.match(/id="([^"]+)"/)?.[1];
-  return {count:async()=>Number(dialogs.has(id)),last(){return this;},waitFor:async()=>{},innerText:async()=>`Edit Project Start Data - (${target}) Add Interim Review - (${target})`,locator:child=>child==='xpath=ancestor::tr'?{locator:()=>({click:async()=>dialogs.add('EntryExitReviewListPopup.btnExit')})}:{count:async()=>1,locator},click:async()=>{
+  return {count:async()=>Number(dialogs.has(id)),last(){return this;},waitFor:async()=>{},innerText:async()=>`Edit Project Start Data - (${target}) Add Interim Review - (${target})`,locator:child=>child==='xpath=ancestor::tr[1]'?{locator:()=>({count:async()=>1,click:async()=>dialogs.add('EntryExitReviewListPopup.btnExit')})}:{count:async()=>1,locator},click:async()=>{
    if(id===`ClientEntryExitTab.editEntry-imageLink_${enrollmentId}`)dialogs.add('EntryDataPopup.cancel-button');
    else if(id==='EntryExitReviewListPopup.addReviewButton')dialogs.add('ModifyReviewPopup.cancel-button');
    else if(id==='ModifyReviewPopup.saveAndContinue-button'){

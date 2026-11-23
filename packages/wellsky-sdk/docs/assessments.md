@@ -188,6 +188,17 @@ const result = await client.subassessments.setEndDate({
 
 This is generic recordset handling. It reads the current row and sends only the end-date cell to its existing `recordset_id` with `isDeleted: false`. When the row has never had an end date, the cell's question comes from the parent's question list. It then verifies the end date, every other row and cell of the subassessment, and the recordset list. It never deletes/recreates the row or retries the write. The result is a `WriteResult`, including `unverified` if the server silently ignores the update or changes another value.
 
+The target must appear exactly once in the mobile assessment read for the supplied client, assessment, and effective date. A generic assessment read can expose a row that the mobile read omits; generic visibility does not satisfy this prerequisite. The SDK does not fall back to writing a generic-only row because that path has not been verified to preserve the exact target and other rows.
+
+An unresolved target returns `failed`, `reason: 'preflight'`, and `committed: false`, with no write submitted. Its `SubassessmentRecordsetError` extends `ValidationError`, retains `fields: ['recordsetId']`, and identifies the mobile GET operation. The message explains the failure without including client or answer values. Callers can distinguish these cases through `error.code` and `error.reason`:
+
+| Code | Reason | Meaning |
+| --- | --- | --- |
+| `SUBASSESSMENT_RECORDSET_NOT_VISIBLE` | `not_visible` | The mobile preflight read did not contain the target; this does not prove the record is absent from HMIS. |
+| `SUBASSESSMENT_RECORDSET_AMBIGUOUS` | `duplicate` | The mobile preflight read contained multiple matches for the target. |
+
+Resolve the read visibility or duplicate-match problem before trying again. Do not append a replacement or delete a row to bypass this preflight. Invalid input remains a normal `ValidationError`; a failed upstream read retains its original error.
+
 On November 2, 2026, sandbox mobile updates that sent only the end-date cell kept the row's other answers, including provider-valued locations and yes/no answers that mobile cannot write itself, so rows with provider questions, such as Coordinated Entry Events, can be end-dated. Earlier versions resent every cell and refused those rows.
 
 An October 22, 2026 sandbox probe confirmed that an existing recordset could be end-dated in place and retained the same ID. Application policy decides when historical records should end or be replaced; the SDK verifies the requested operation.

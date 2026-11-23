@@ -17,6 +17,20 @@ export class ValidationError extends WellSkyError {
   readonly fields: readonly string[];
   constructor(operation: string, fields: readonly string[] = []) { super("validation", operation); this.name = "ValidationError"; this.fields = [...fields]; }
 }
+/** A valid target ID could not be resolved uniquely in the mobile preflight response. */
+export class SubassessmentRecordsetError extends ValidationError {
+  readonly reason: "not_visible" | "duplicate";
+  readonly code: "SUBASSESSMENT_RECORDSET_NOT_VISIBLE" | "SUBASSESSMENT_RECORDSET_AMBIGUOUS";
+  constructor(operation: string, reason: "not_visible" | "duplicate") {
+    super(operation, ["recordsetId"]);
+    this.name = "SubassessmentRecordsetError";
+    this.reason = reason;
+    this.code = reason === "not_visible" ? "SUBASSESSMENT_RECORDSET_NOT_VISIBLE" : "SUBASSESSMENT_RECORDSET_AMBIGUOUS";
+    this.message = reason === "not_visible"
+      ? "Subassessment target recordset is not visible in the mobile preflight read; no write was submitted"
+      : "Subassessment target recordset has duplicate matches in the mobile preflight read; no write was submitted";
+  }
+}
 export class UpstreamError extends WellSkyError {
   /** Opt-in private diagnostics; non-enumerable and absent by default. */
   declare readonly responseBody?: string;

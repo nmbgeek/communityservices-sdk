@@ -1,7 +1,7 @@
 import { isRecord } from "./validation.js";
 import { WellSkyError } from "./runtime.js";
 import type { RequestOptions } from "./runtime.js";
-import { ValidationError } from "./errors.js";
+import { SubassessmentRecordsetError, ValidationError } from "./errors.js";
 import { verifyWrite } from "./verification.js";
 import type { WriteResult } from "./verification.js";
 import type { AddSubAssessmentQuestionWithAnswerViewModel } from "./generated/v3-models.js";
@@ -79,7 +79,8 @@ export class SubassessmentEditor {
         const parent = parentFrom(await this.#source.read({ ...input, ...options }), input.parentField);
         const records = objectRows(parent.sub_assessment_answer_list ?? []);
         const selected = records.filter(r => r.recordset_id === input.recordsetId);
-        if (selected.length !== 1 || !selected[0]) throw new ValidationError(operation, ["recordsetId"]);
+        if (selected.length === 0) throw new SubassessmentRecordsetError(readEndpoint, "not_visible");
+        if (selected.length !== 1 || !selected[0]) throw new SubassessmentRecordsetError(readEndpoint, "duplicate");
         // A row read omits cells never answered, so fall back to the parent's question list.
         const isEnd = (q: Record<string, unknown>) => q.virt_field_name === input.endDateField && q.question_type === "date" && typeof q.question_id === "number";
         const inRow = objectRows(selected[0].sub_assessment_list ?? []).filter(isEnd);

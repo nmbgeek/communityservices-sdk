@@ -221,8 +221,10 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
       if(JSON.stringify(entryFields)!==JSON.stringify(await dateFields('Project Start Date')))throw Error('Entry date changed');
       save=control(page,'EntryDataPopup.saveAndContinue-button');
     }else{
-      await closeDialogs();const row=control(page,`ClientEntryExitTab.editEntry-imageLink_${intent.enrollmentId}`).locator('xpath=ancestor::tr');
-      await row.locator('[title^="Interim Reviews:"]').click();await control(page,'EntryExitReviewListPopup.addReviewButton').waitFor();await ready();await control(page,'EntryExitReviewListPopup.addReviewButton').click();await control(page,'ModifyReviewPopup.saveAndContinue-button').waitFor();await ready();
+      await closeDialogs();const row=control(page,`ClientEntryExitTab.editEntry-imageLink_${intent.enrollmentId}`).locator('xpath=ancestor::tr[1]');
+      const reviews=row.locator('[title^="Interim Reviews:"]');
+      if(await reviews.count()!==1)throw Error('Interim review control is missing or ambiguous for target enrollment');
+      await reviews.click();await control(page,'EntryExitReviewListPopup.addReviewButton').waitFor();await ready();await control(page,'EntryExitReviewListPopup.addReviewButton').click();await control(page,'ModifyReviewPopup.saveAndContinue-button').waitFor();await ready();
       singleClientReview=intent.clientIds.length===1&&intent.clientIds[0]===intent.clientId;
       await page.getByLabel('Interim Review Type',{exact:true}).selectOption({label:'Update'});
       const fields=await page.evaluate(value=>{const d=new Date(value);if(d.getMilliseconds())throw Error('UI supports whole seconds only');const local=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),d.getMinutes(),d.getSeconds());if(+local!==+d)throw Error('Ambiguous local review time');return {Month:String(d.getMonth()+1).padStart(2,'0'),Day:String(d.getDate()).padStart(2,'0'),Year:String(d.getFullYear()),Hour:String(d.getHours()%12||12),Minute:String(d.getMinutes()).padStart(2,'0'),Second:String(d.getSeconds()).padStart(2,'0'),'AM/PM':d.getHours()<12?'AM':'PM'};},intent.reviewDate);

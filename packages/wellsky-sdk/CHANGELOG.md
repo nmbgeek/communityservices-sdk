@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2 - 2026-11-23
+
+- Scope Interim Review controls to the target enrollment's nearest row and reject missing or duplicate controls before opening a review list. Cover both enrollment positions in nested tables. Fixes #11.
+- Expose `SubassessmentRecordsetError` with distinct codes for missing mobile visibility and duplicate recordsets during end-date preflight. Document the mobile visibility prerequisite and preserve the no-write result for unresolved targets. Fixes #12.
+
 ## 0.12.1 - 2026-11-23
 
 - Select Use System Date when the backdate popup blocks enrollment navigation, including when opening a client triggers the popup. Add regression coverage for both cases.
