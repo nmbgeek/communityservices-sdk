@@ -13,6 +13,7 @@ function wire(rows){
 function fixture(extra={},navigation={}){
  const calls=[],events=[],entry={enrollmentId:695,clientId:597,projectStartDate:'2026-10-19T16:00:00.000Z',groupId:null,householdId:null,providerId:16951,enrollmentType:'HUD',...extra};
  const dialogs=new Set(navigation.visibleInterim?['EntryExitAssessment.btnExit-button','EntryExitReviewListPopup.btnExit']:[]);
+ if(navigation.backdateInitially)dialogs.add('BackDateSystemDatePopup.useSysDateBtn');
  let headingVisible=!navigation.staleHeading,navigationStarted=false;
  const locator=selector=>({
   count:async()=>selector==='select:visible'?Number(!!navigation.switcher):Number(dialogs.has(selector.match(/id="([^"]+)"/)?.[1])),
@@ -24,8 +25,8 @@ function fixture(extra={},navigation={}){
  });
  const page={
   setDefaultTimeout(){},url:()=>base+`index.html#loadClient;clientId=${navigation.hashClientId??597}`,waitForFunction:async()=>{},locator,
-  goto:async()=>{events.push('goto');navigationStarted=true;},
-  getByRole:(_,options)=>({click:async()=>{assert.ok(headingVisible,'displayed client must be confirmed before tabs');events.push(options.name);}}),
+  goto:async()=>{events.push('goto');navigationStarted=true;if(navigation.backdateOnNavigation)dialogs.add('BackDateSystemDatePopup.useSysDateBtn');},
+  getByRole:(_,options)=>({click:async()=>{assert.ok(!dialogs.has('BackDateSystemDatePopup.useSysDateBtn'),'backdate overlay blocks summary tab');assert.ok(headingVisible,'displayed client must be confirmed before tabs');events.push(options.name);}}),
   getByText:text=>text instanceof RegExp?{isVisible:async()=>headingVisible,waitFor:async()=>{assert.ok(navigationStarted);events.push('wait-client-heading');if(navigation.headingFails)throw Error('Client heading did not load');headingVisible=true;}}:{isVisible:async()=>false},
   waitForResponse:async()=>({status:()=>200,text:async()=>'//OK[]',request:()=>({postData:()=>`7|0|9|${base}|POLICY|`,allHeaders:async()=>({'content-type':'text/x-gwt-rpc','x-gwt-module-base':base,'x-gwt-permutation':'PERMUTATION'})})}),
   evaluate:async(_,request)=>{
@@ -44,6 +45,14 @@ test('enrollment reader returns authoritative provider and type from mapped targ
  assert.match(f.calls[0].body,/e.providerId AS providerId, e.typeEntryExit.name AS enrollmentType/);
  assert.deepEqual(result.members,[{clientId:597,enrollmentId:695}]);assert.deepEqual(result.reviews,[]);
  assert.ok(f.calls.every(call=>call.body.includes('|getMappedResults|')));
+});
+test('enrollment reader uses system date for a backdate popup already open',async()=>{
+ const f=fixture({},{backdateInitially:true});await f.read();
+ assert.deepEqual(f.events.slice(0,3),['close:BackDateSystemDatePopup.useSysDateBtn','Summary','Entry / Exit']);
+});
+test('enrollment reader uses system date for a backdate popup opened by client navigation',async()=>{
+ const f=fixture({},{staleHeading:true,hashClientId:596,backdateOnNavigation:true});await f.read();
+ assert.deepEqual(f.events.slice(0,5),['goto','wait-client-heading','close:BackDateSystemDatePopup.useSysDateBtn','Summary','Entry / Exit']);
 });
 test('enrollment reader rejects missing or mismatched authoritative target context',async()=>{
  for(const extra of [{providerId:null},{providerId:0},{providerId:'16951'},{enrollmentType:''},{enrollmentType:null},{clientId:598},{enrollmentId:696}]){

@@ -41,7 +41,7 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
   const closeDialogs=async()=>{
     for(let i=0;i<12;i++){
       let closed=false;
-      for(const name of ['AddAdditionalHouseholdMembersPopup.cancelBtn','ModifyReviewPopup.cancel-button','EntryDataPopup.cancel-button','ExitDataPopup.cancel-button','EntryExitReviewClientCountPopup.btnExit','EntryExitClientCountPopup.btnExit','EntryExitAssessment.btnExit-button','EntryExitReviewListPopup.btnExit']){
+      for(const name of ['BackDateSystemDatePopup.useSysDateBtn','AddAdditionalHouseholdMembersPopup.cancelBtn','ModifyReviewPopup.cancel-button','EntryDataPopup.cancel-button','ExitDataPopup.cancel-button','EntryExitReviewClientCountPopup.btnExit','EntryExitClientCountPopup.btnExit','EntryExitAssessment.btnExit-button','EntryExitReviewListPopup.btnExit']){
         const c=control(page,name);if(await c.count()){await c.last().click();await ready();closed=true;break;}
       }
       if(!closed)return;
@@ -62,6 +62,8 @@ export function createPlaywrightGwtSession({page,tenant,moduleBaseUrl}) {
       }
       await clientHeading.waitFor();await ready();
     }
+    // Loading a client can open the date-context popup after the initial cleanup.
+    await closeDialogs();
     await page.getByRole('tab',{name:'Summary',exact:true}).click();await ready();
     await page.getByRole('tab',{name:'Entry / Exit',exact:true}).click();await ready();
   };

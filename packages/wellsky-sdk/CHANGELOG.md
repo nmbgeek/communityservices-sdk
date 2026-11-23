@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1 - 2026-11-23
+
+- Select Use System Date when the backdate popup blocks enrollment navigation, including when opening a client triggers the popup. Add regression coverage for both cases.
+
 ## 0.12.0 - 2026-11-16
 
 - Route Race and Ethnicity enrollment answers through standard REST writes and verify the raw demographic text used by Summary. Add `createRaceEthnicity` for standalone updates and explicit current-answer repair, with durable retries and actual revision timestamps.
