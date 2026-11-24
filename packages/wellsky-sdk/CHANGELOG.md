@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.0 - 2026-11-24
+
+- Support WellSky’s username-first Okta sign-in with TOTP. Configure `WELLSKY_OKTA_ORIGIN` to enable Okta and reuse the authenticated browser session for related operations.
+
 ## 0.12.2 - 2026-11-23
 
 - Scope Interim Review controls to the target enrollment's nearest row and reject missing or duplicate controls before opening a review list. Cover both enrollment positions in nested tables. Fixes #11.
