@@ -22,7 +22,7 @@ export function attachAuthentication(page,reconnect,probe,connection=pageConnect
  page.on('response',response);
  const state={
   get generation(){return generation;},
-  async isExpired(){return expired||await page.locator('[id="formfield-password"]:visible').count()>0;},
+  async isExpired(){return expired||await page.locator('[id="formfield-login"]:visible, [id="formfield-password"]:visible').count()>0;},
   async reauthenticate(){
    if(closed)throw Error('Session closed');
    // Invalidate all prepared payloads even if authentication subsequently fails.

@@ -74,6 +74,34 @@ The login uses the required `tenant` option to build its URL, opens a fresh brow
 
 Use the page exclusively for these helpers. They serialize their operations on a shared page; do not drive it simultaneously through unrelated scripts. Selectors and GWT signatures are experimental. Unexpected UI/schema changes, incomplete lists (over 1,000 records), authentication loss, or conflicting records stop the operation. A new login does not clear an uncertain attempt. The file journal supports one host; use a shared durable store across multiple hosts. Keep journals private and retain them across restarts. A crash can leave a lock that requires manual reconciliation.
 
+## Okta sign-in
+
+For a WellSky tenant that uses Okta, set `WELLSKY_OKTA_ORIGIN` to the exact
+HTTPS origin of its Okta sign-in page. Get the origin from your administrator
+or from the address bar after starting a sign-in on your WellSky tenant.
+The origin includes the scheme and hostname, without a path or query string.
+Setting it enables Okta sign-in. Leave it unset for tenants that use legacy
+WellSky sign-in. If your app connects to both, put the origin in the credentials
+file for the Okta tenant and leave the process-wide setting unset.
+
+Keep the browser account credentials in the selected `envFile`. Use
+`HMIS_UI_USER` (or `HMIS_UI_USERNAME`) and `HMIS_UI_PASSWORD`. Set
+`WELLSKY_TOTP_SECRET` to the enrolled authenticator's Base32 seed. Both
+`WELLSKY_OKTA_ORIGIN` and `WELLSKY_TOTP_SECRET` can also come from the Node
+process environment. Values in the selected file take precedence.
+
+The SDK enters the WellSky username, follows the redirect to the configured
+Okta origin, and completes the supported hosted widget password and
+authenticator-code prompts. It waits for the tenant's dashboard before giving
+the browser session to callers. Okta sign-in skips the legacy password
+recovery workflow. Other MFA methods such as push and security keys require
+interactive sign-in.
+
+Open one session and reuse it for related operations. The SDK keeps the
+authenticated browser context in memory and signs in again on the same page
+when it detects expiration. Opening a new session or restarting the process
+requires a fresh sign-in.
+
 ## Expired UI passwords
 
 Password recovery is enabled by default for `openUiSession` and `openEnrollmentSession`. It uses `!` and a private durable journal under `~/.wellsky-sdk/password-recovery`, shared by UI account across callers on that host. Set `HMIS_UI_PASSWORD_RECOVERY_DIR` in the selected credentials file to use a persistent directory of your choice. The directory must remain available across restarts. You can override the store or suffix:

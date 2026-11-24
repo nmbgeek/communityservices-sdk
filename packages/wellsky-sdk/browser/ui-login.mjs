@@ -6,6 +6,7 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {createFileGwtMutationStore} from './file-store.mjs';
 import {attachAuthentication} from './session-authentication.mjs';
+import {completeOktaLogin,readOktaOrigin} from './okta-login.mjs';
 import {withPageLock} from './page-lock.mjs';
 import {waitForLogin,submitExpiredPassword,restoreOriginalPassword,probeAuthentication} from './password-recovery.mjs';
 
@@ -41,12 +42,19 @@ async function loginUiSession({chromium,tenant,moduleBaseUrl,envFile='.env',exec
  const failure=code=>new LoginError(code,stage,record?.stage);
  try {
   const env=parseEnv(await readFile(envFile,'utf8'));
-  if(!env.HMIS_UI_USER||!env.HMIS_UI_PASSWORD)throw failure('LOGIN_FAILED');
-  const recovery=passwordRecovery!==false,appendCharacter=passwordRecovery?.appendCharacter??'!';
+  const user=env.HMIS_UI_USER??env.HMIS_UI_USERNAME;
+  if(!user||!env.HMIS_UI_PASSWORD)throw failure('LOGIN_FAILED');
+  const configuredOrigin=env.WELLSKY_OKTA_ORIGIN??process.env.WELLSKY_OKTA_ORIGIN;
+  let oktaOrigin;
+  if(configuredOrigin){
+   stage='okta-configuration';
+   oktaOrigin=readOktaOrigin(configuredOrigin);
+  }
+  const recovery=!oktaOrigin&&passwordRecovery!==false,appendCharacter=passwordRecovery?.appendCharacter??'!';
   if(passwordRecovery!==undefined&&passwordRecovery!==false&&(!passwordRecovery||typeof passwordRecovery!=='object'||Array.isArray(passwordRecovery)))throw failure('RECOVERY_CONFIGURATION');
   const store=passwordRecovery?.store??createFileGwtMutationStore(env.HMIS_UI_PASSWORD_RECOVERY_DIR||join(homedir(),'.wellsky-sdk','password-recovery'));
   if(recovery&&(!store||!['withLock','read','write'].every(k=>typeof store[k]==='function')||typeof appendCharacter!=='string'||!/^[!-~]$/.test(appendCharacter)))throw failure('RECOVERY_CONFIGURATION');
-  const accountHash=createHash('sha256').update(env.HMIS_UI_USER.trim().toLowerCase()).digest('hex');
+  const accountHash=createHash('sha256').update(user.trim().toLowerCase()).digest('hex');
   const scope=JSON.stringify([connection.scope,'password-recovery',accountHash]);
   const run=async()=>{
    let records=[];
@@ -72,12 +80,27 @@ async function loginUiSession({chromium,tenant,moduleBaseUrl,envFile='.env',exec
      return route.continue();
     });
     const page=reuse?existing.page:await context.newPage();page.setDefaultTimeout(timeoutMs);
-    stage='open-application';await page.goto(connection.moduleBaseUrl+'index.html',{waitUntil:'domcontentloaded',timeout:timeoutMs});
-    await page.locator('[id="formfield-login"]').fill(env.HMIS_UI_USER);
-    await page.locator('[id="formfield-password"]').fill(password);
-    stage='login';await page.locator('[id="LoginView.fbtn_submit"]').click();
-    const outcome=await waitForLogin(page,timeoutMs);
-    return {context,page,outcome};
+    const oktaRoute=url=>url.origin===oktaOrigin;
+    // The page-level handler takes precedence over the tenant-only context route during login.
+    if(oktaOrigin)await page.route(oktaRoute,route=>route.continue());
+    try{
+     stage='open-application';await page.goto(connection.moduleBaseUrl+'index.html',{waitUntil:'domcontentloaded',timeout:timeoutMs});
+     if(oktaOrigin){
+      stage='okta-entry';
+      await completeOktaLogin({page,origin:oktaOrigin,target:target.origin,tenant,user,uiPassword:password,
+       secret:env.WELLSKY_TOTP_SECRET??process.env.WELLSKY_TOTP_SECRET,timeoutMs,setStage:value=>{stage=value;}});
+     }else{
+      await page.locator('[id="formfield-login"]').fill(user);
+      await page.locator('[id="formfield-password"]').fill(password);
+      stage='login';await page.locator('[id="LoginView.fbtn_submit"]').click();
+     }
+     const outcome=await waitForLogin(page,timeoutMs);
+     const finalUrl=new URL(page.url());
+     if(finalUrl.origin!==target.origin||!finalUrl.pathname.startsWith('/'+tenant+'/'))throw failure('LOGIN_FAILED');
+     return {context,page,outcome};
+    }finally{
+     if(oktaOrigin)await page.unroute(oktaRoute);
+    }
    };
    const finish=async(session,recovered)=>{
     if(existing&&session.page!==existing.page){

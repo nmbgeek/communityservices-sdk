@@ -41,9 +41,9 @@ export async function probeAuthentication(context,moduleUrl,timeoutMs){
  try{
   await page.goto(moduleUrl+'index.html',{waitUntil:'domcontentloaded',timeout:timeoutMs});
   await page.waitForFunction(()=>{
-   const password=document.getElementById('formfield-password');
-   return password&&password.getBoundingClientRect().width>0||location.hash==='#mainPage'&&document.body.innerText.includes('Home Page Dashboard');
+   return ['formfield-login','formfield-password'].some(id=>document.getElementById(id)?.getBoundingClientRect().width>0)
+    ||location.hash==='#mainPage'&&document.body.innerText.includes('Home Page Dashboard');
   },null,{timeout:timeoutMs});
-  return await page.locator('[id="formfield-password"]').isVisible();
+  return await page.locator('[id="formfield-login"]:visible, [id="formfield-password"]:visible').count()>0;
  }finally{await page.close();}
 }
