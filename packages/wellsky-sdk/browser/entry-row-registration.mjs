@@ -35,7 +35,7 @@ export function createEntryRowRegistrar({api,store,enrollmentSession,discover,sc
     if(s?.source!=='gwt-rpc'||s.tenant!==api.tenant||s.clientId!==target.clientId||s.enrollmentId!==target.enrollmentId||s.providerId!==entry.context.providerId||s.enrollmentType!==entry.context.type||parseRestInstant(s.projectStartDate)!==parseRestInstant(at))fail('ROW_REGISTRATION_CONTEXT_MISMATCH','enrollment identity changed during row registration');
    };
    await verifyEnrollment();
-   const discovered=await discover({...entry.context}),definition=discovered.entry.definition;
+   const discovered=await discover({...entry.context},false,{legacy:!entry.formSnapshot}),definition=discovered.entry.definition;
    const schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
    if(schemaHash!==entry.schemaHash)fail('WORKFLOW_SCHEMA_CHANGED','program assessment configuration changed');
    const rowMap=entry.rows??{},parents=entry.rowParents??{};

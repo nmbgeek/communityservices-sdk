@@ -1,3 +1,4 @@
+import {createFormMetadataCache, genericFormHash, isFormDrift} from './form-metadata.mjs';
 import {apiScope} from './connection.mjs';
 import {raceCategoryText,readRaceAnswer,raceAnswerMatches} from './race-ethnicity.mjs';
 import {entryExitTypes} from './entry-exit-types.mjs';
@@ -16,6 +17,10 @@ const positive=v=>Number.isSafeInteger(v)&&v>0;
 const validGroupId=v=>positive(v)||typeof v==='string'&&/^[a-zA-Z0-9_-]+$/.test(v);
 const canonical=v=>JSON.stringify(v,(_,x)=>object(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=v=>createHash('sha256').update(canonical(v)).digest('hex');
+function journalSchema(discovered){
+ const {provider,entry,interim}=discovered;
+ return hash({providerId:provider.providerId,entry:{assessment:entry.assessment,questions:entry.definition.questions},interim:{assessment:interim.assessment,questions:interim.definition.questions}});
+}
 const fail=(message,options)=>{throw new EnrollmentWorkflowError(message,{committed:false,...options});};
 export class EnrollmentWorkflowError extends Error {
  constructor(reason,options){
@@ -49,7 +54,7 @@ function sameAnswer(expected,actual){
 }
 function questions(response){const rows=toItems(response);if(!Array.isArray(rows)||rows.some(q=>!object(q)||typeof q.virt_field_name!=='string')||new Set(rows.map(q=>q.virt_field_name)).size!==rows.length)fail('ambiguous assessment read');return rows;}
 function compile(definition,input,{yesNoWrites,writeLabel}={}){
- fields(input,['answers','subassessments','endDates','notApplicable','carryForward']);
+ fields(input,['answers','subassessments','endDates','notApplicable','carryForward','schemaRevision']);
  const answers=input.answers??{},excluded=input.notApplicable??{},carry=input.carryForward??[],rows=input.subassessments??[],ends=input.endDates??[];
  if(!object(answers)||!object(excluded)||!Array.isArray(carry)||!Array.isArray(rows)||!Array.isArray(ends)||new Set(carry).size!==carry.length)fail('invalid assessment plan');
  const encoded=encodeAnswers(definition.questions,answers,{endpoint:'mobile'}),index=new Map(definition.questions.map(q=>[q.fieldName,q]));
@@ -124,7 +129,7 @@ async function enrollments(api,clientId,{enrollmentSession,writeAttempted=false}
 
 /** Explicit orchestration for an existing client. All writers must share the durable store.
  * No automatic retries of uncertain REST writes. This is not a cross-system transaction. */
-export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollmentSession,exitUi,memberEntryDatePort,birthDates,assessmentLocations={},yesNoWrites='mobile',writeLabel}){
+export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollmentSession,exitUi,memberEntryDatePort,birthDates,assessmentLocations={},metadataCache,yesNoWrites='mobile',writeLabel}){
  let tenantScope;try{tenantScope=apiScope(api, discovery, helpers, enrollmentSession, exitUi, writeLabel);}catch(cause){throw new EnrollmentWorkflowError(cause instanceof Error?cause.message:'invalid workflow configuration',{code:'WORKFLOW_CONFIGURATION_INVALID',committed:false,cause});}
  const execute=async(operation,action)=>{
   const state={attempted:false};
@@ -146,11 +151,16 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   if(['entry','interim'].some(phase=>typeof locations[phase]!=='string'||!locations[phase].trim())||Object.values(locations).some(location=>typeof location!=='string'||!location.trim()))fail('entry and interim assessment locations required; exit location must be nonempty when supplied');
  }
  const locationsByType={HUD:{entry:'showHudEntry',interim:'showHudInterim',exit:'showHudExit'},VA:{entry:'showVaEntry',interim:'showVaInterim',exit:'showVaExit'},...structuredClone(assessmentLocations)};
- const discover=async(input,includeExit=false)=>{
+ const formCache=metadataCache===undefined?undefined:createFormMetadataCache({config:metadataCache,api,discovery,enrollmentSession,writeLabel,tenantScope,locationsByType,hash,date,fail});
+ const discover=async(input,includeExit=false,{refreshPhase,legacy=false}={})=>{
   fields(input,['clientId','providerId','type','entryDate']);if(!positive(input.clientId)||!positive(input.providerId)||!entryExitTypes.includes(input.type))fail('client, provider and supported Entry/Exit type required');const at=date(input.entryDate);
   const locations=locationsByType[input.type];if(!locations||includeExit&&!locations.exit)fail(`assessment locations required for ${input.type}${includeExit?' including exit':''}`,{code:'ASSESSMENT_LOCATIONS_REQUIRED'});
   const client=toItems(await api.clients.get({path:{clientId:input.clientId}}));if(client.length!==1||client[0].clientId!==input.clientId||client[0].isActive===false)fail('active client required');
   const catalog=await readProgramCatalog(api);const providers=catalog.providers.filter(p=>p.providerId===input.providerId);if(providers.length!==1)fail('active operational program required');
+  if(formCache&&!legacy){
+   const phases=includeExit?['entry','interim','exit']:['entry','interim'];
+   return {provider:providers[0],...await formCache.resolve(input,phases,refreshPhase)};
+  }
   const configuration=await discovery.getProviderAssessments({providerId:input.providerId});if(configuration.providerId!==input.providerId)fail('provider discovery mismatch');
   const resolved={};
   for(const phase of ['entry','interim',...(includeExit?['exit']:[])]){
@@ -168,9 +178,19 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   }
   return {provider:providers[0],...resolved,...(picklistOptions?{picklistOptions}:{})};
  };
+ const changed=(refreshed,cause)=>{
+  const error=new EnrollmentWorkflowError('assessment form changed; rebuild the plan from the refreshed discovery',{code:'FORM_REVISION_CHANGED',cause});
+  error.discovery=refreshed;
+  throw error;
+ };
+ const refreshAfter=async(input,phase,original,cause)=>{
+  if(!original.schemaRevision || !isFormDrift(cause))return;
+  const refreshed=await discover(input,phase==='exit',{refreshPhase:phase});
+  if(refreshed.schemaRevision!==original.schemaRevision)changed(refreshed,cause);
+ };
  const scope=clientId=>JSON.stringify([tenantScope,'enrollment-workflow',clientId]);
  const reservationScope=clientId=>JSON.stringify([tenantScope,'household-workflow-reservation',clientId]);
- const {correctEntry,resolveEntryCorrection}=createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,scope,reservationScope,makeError:(reason,options)=>new EnrollmentWorkflowError(reason,options)});
+ const {correctEntry,resolveEntryCorrection}=createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,refreshAfter,changed,scope,reservationScope,makeError:(reason,options)=>new EnrollmentWorkflowError(reason,options)});
  const registerEntryRows=createEntryRowRegistrar({api,store,enrollmentSession,discover,scope,reservationScope,makeError:(reason,options)=>new EnrollmentWorkflowError(reason,options)});
  const discoverHouseholdEnrollment=createHouseholdEnrollmentDiscovery({api,enrollmentSession,makeError:(reason,options)=>new EnrollmentWorkflowError(reason,options)});
  const run=async(kind,raw,internal={})=>{
@@ -185,6 +205,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   const exitDetails=standaloneExit?expectedExitDetails(input):null;
   if(standaloneExit&&(exitDetails.destinationDetails||exitDetails.reasonForLeavingOther)&&typeof exitUi.readExitDetails!=='function')fail('authoritative exit details reader required');
   const locked=internal.locked?async(_scope,work)=>work():store.withLock.bind(store);
+  let refreshOnDrift;
   return locked(scope(input.clientId),async()=>{
    const reservations=await store.withLock(reservationScope(input.clientId),()=>store.read(reservationScope(input.clientId)));
    if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'&&r.owner!==internal.owner))fail('unfinished household workflow must be reconciled first');
@@ -221,13 +242,39 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     return {found:true,value:exit};
    };
    const exitInput=standaloneExit?{...exitTarget,clientIds:[input.clientId],exitDate:input.exitDate,destination:input.destination,reasonForLeaving:input.reasonForLeaving,...(input.destinationDetails?{destinationDetails:input.destinationDetails}:{}),...(input.reasonForLeavingOther?{reasonForLeavingOther:input.reasonForLeavingOther}:{})}:null;
-   const discovered=await discover({clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate)},kind==='exit');
-   const schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
-   if((record&&record.schemaHash!==schemaHash)||(entry&&entry.schemaHash!==schemaHash))fail('program assessment configuration changed');
+   const discoveryInput={clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate)};
+   let currentForms, unavailable;
+   try{
+    currentForms=await discover(discoveryInput,kind==='exit',{legacy:Boolean(record&&!record.formSnapshot)});
+    refreshOnDrift=cause=>refreshAfter(discoveryInput,kind,currentForms,cause);
+   }catch(error){
+    if(error.code!=='FORM_REVISION_UNAVAILABLE'||!record?.formSnapshot)throw error;
+    unavailable=error;
+    currentForms=record.formSnapshot;
+   }
+   // Read back an attempted operation using the same definition and labels that encoded it.
+   const frozen=record?.formSnapshot && record.formSnapshot.schemaRevision!==currentForms.schemaRevision;
+   const discovered=frozen?record.formSnapshot:currentForms;
+   let datedFormChanged=false;
+   const requireCurrent=()=>{
+    if(unavailable)throw unavailable;
+    if(frozen)changed(currentForms);
+    if(datedFormChanged)fail('dated assessment fields changed',{code:'FORM_FIELDS_CHANGED'});
+   };
+   const expectedRevision=input.assessment.schemaRevision??internal.expectedRevision;
+   if(expectedRevision!==undefined && expectedRevision!==discovered.schemaRevision)changed(currentForms);
+   const schemaHash=journalSchema(discovered);
+   if(record&&record.schemaHash!==schemaHash)fail('program assessment configuration changed');
+   if(entry&&entry.schemaHash!==schemaHash){
+    // A later, explicitly dated standards revision can apply to a new review or exit.
+    if(!entry.formSnapshot || !discovered.formRevision || discovered.formRevision===entry.formSnapshot.formRevision ||
+       journalSchema(entry.formSnapshot)!==entry.schemaHash)fail('program assessment configuration changed');
+    if(input.assessment.schemaRevision!==discovered.schemaRevision)changed(discovered);
+   }
    const definition=discovered[kind].definition,code=definition.assessmentCode,at=kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate);
    const exitSchemaHash=kind==='exit'?hash({assessment:discovered.exit.assessment,questions:definition.questions}):undefined;
    if(record&&kind==='exit'&&record.exitSchemaHash!==exitSchemaHash)fail('exit assessment configuration changed');
-   const operationWriteLabel=writeLabel??(discovered.picklistOptions?createCatalogWriteLabelResolver(definition,discovered.picklistOptions):undefined);
+   const operationWriteLabel=writeLabel??(discovered.writeLabels||discovered.picklistOptions?createCatalogWriteLabelResolver(definition,discovered.writeLabels??discovered.picklistOptions):undefined);
    const plan=compile(definition,input.assessment,{yesNoWrites,writeLabel:operationWriteLabel});
    const raceQuestion=definition.questions.find(q=>q.fieldName==='HUD_RACEETHNICITY');
    const raceTarget=raceQuestion?{clientId:input.clientId,questionId:raceQuestion.questionId}:null;
@@ -267,7 +314,6 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const proposedHead=plan.scalar.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH');
    if(proposedHead)checkHeadAnswer(proposedHead.answer_value);
    if(plan.ends.length&&(kind==='entry'||plan.ends.some(e=>Date.parse(e.endDate)>=Date.parse(at)||Date.parse(e.endDate)<Date.parse(context.entryDate))))fail('row closure must fall between entry and assessment');
-   const read=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at}}));
    // An undated read omits rows dated after the server's current time, which can include this
    // assessment's own rows. Read at the later of now and the assessment instant.
    const readCurrent=async()=>questions(await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:new Date(Math.max(Date.now(),Date.parse(at))).toISOString().slice(0,19)+'Z'}}));
@@ -284,7 +330,10 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
      if(collisions.length)fail('mobile scalar answer already exists at the effective date',{code:'MOBILE_ANSWER_EXISTS',step:'scalars',fields:collisions});
     }
    };
-   const initial=await read();
+   const initialResponse=await api.assessments.get({path:{clientId:input.clientId,assessmentCode:code},query:{dateEffective:at}});
+   datedFormChanged=Boolean(discovered[kind].genericSchema && genericFormHash(initialResponse,hash)!==discovered[kind].genericSchema);
+   if(!record)requireCurrent();
+   const initial=questions(initialResponse);
    if(!record&&plan.scalar.length)assertScalarInsertable(await readSaved());
    if(expectedHead===input.clientId&&headQuestion)checkHeadAnswer(proposedHead?.answer_value??initial.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH')?.answer_value);
    for(const field of plan.carry.filter(field=>field!=='SVPPROFDOB')){if(kind==='entry'&&record?.correctedScalars?.[field])continue;const q=initial.find(q=>q.virt_field_name===field);if(!q||(q.question_type==='sub_assessment'?!q.sub_assessment_answer_list?.length:!q.answer_value))fail('carry-forward field is empty');}
@@ -329,14 +378,16 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const observed=await inspectStandaloneExit();
     if(!observed.found&&!record?.steps.exit)await exitUi.validateExit(exitInput);
    }
-   if(internal.preflight)return {assessmentCode:code,...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
+   if(internal.preflight)requireCurrent();
+   if(internal.preflight)return {assessmentCode:code,...(discovered.schemaRevision?{schemaRevision:discovered.schemaRevision}:{}),...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
    const wasVerified=record?.stage==='verified';
-   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
+   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(currentForms.schemaRevision?{formSnapshot:currentForms}:{}),...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const step=async(name,inspect,submit)=>{
     let result=await inspect();const previous=record.steps[name];
     if(result.found){record.steps[name]={state:'verified',value:result.value};await persist();return result.value;}
     if(previous)throw new EnrollmentWorkflowError(previous.state==='verified'?'verified step changed':'uncertain write requires reconciliation',{step:name});
+    requireCurrent();
     record.steps[name]={state:'attempted'};await persist();
     let writeError;
     operation.attempted=true;
@@ -365,7 +416,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    else {const found=await findEnrollment();if(!found.found)fail('saved enrollment missing');record.enrollmentId=entry.enrollmentId;}
    await persist();
    if(kind==='interim'){
-    if(!internal.readReview)operation.attempted=true;
+    if(!internal.readReview){requireCurrent();operation.attempted=true;}
     // The GWT helper has its own journal and authoritative reads; it owns uncertain-write reconciliation.
     const review=internal.readReview?await internal.readReview({clientId:input.clientId,enrollmentId:record.enrollmentId}):await helpers.createInterimUpdate({clientId:input.clientId,enrollmentId:record.enrollmentId,clientIds:[input.clientId],reviewDate:at});
     const matches=review.snapshot.reviews.filter(r=>r.type==='Update'&&restDate(r.reviewDate)===restDate(at)&&r.clientIds.includes(input.clientId));if(matches.length!==1||record.reviewId&&record.reviewId!==matches[0].reviewId)fail('interim did not verify');record.reviewId=matches[0].reviewId;await persist();
@@ -440,12 +491,15 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
      const known=record.steps.birthDate.value;
      result=await birthDates.verify({...dobContext,dateOfBirth:known.dateOfBirth,effectiveDate:known.effectiveDate,allowLater:true});
     }else if(plan.dateOfBirth!==undefined){
-     operation.attempted=true;result=await birthDates.update({...dobContext,key:'enrollment-dob:'+hash({key:input.key,kind,clientId:input.clientId}),dateOfBirth:plan.dateOfBirth,effectiveDate:at,...(kind==='entry'?{entry:{enrollmentId:record.enrollmentId,assessmentName:discovered.entry.assessment.name}}:{})});
+     requireCurrent();operation.attempted=true;result=await birthDates.update({...dobContext,key:'enrollment-dob:'+hash({key:input.key,kind,clientId:input.clientId}),dateOfBirth:plan.dateOfBirth,effectiveDate:at,...(kind==='entry'?{entry:{enrollmentId:record.enrollmentId,assessmentName:discovered.entry.assessment.name}}:{})});
     }else result=await birthDates.verify({...dobContext,dateOfBirth:carriedBirthDate.dateOfBirth,effectiveDate:carriedBirthDate.effectiveDate,allowLater:true});
     record.steps.birthDate={state:'verified',value:{clientId:input.clientId,dateOfBirth:result.dateOfBirth,effectiveDate:result.effectiveDate}};await persist();
    }
    record.stage='verified';await persist();
    return {key:input.key,outcome:wasVerified?'already-present':'verified',clientId:input.clientId,enrollmentId:record.enrollmentId,...(record.reviewId?{reviewId:record.reviewId}:{}),...(record.projectExitDate?{projectExitDate:record.projectExitDate,exitSubgroupId:record.exitSubgroupId}:{}),assessmentCode:code,recordsetIds:structuredClone(record.rows),effectiveDate:at,...(record.steps.birthDate?{birthDate:structuredClone(record.steps.birthDate.value)}:{})};
+  }).catch(async error=>{
+   if(refreshOnDrift)await refreshOnDrift(error);
+   throw error;
   });
  };
  const householdScope=headClientId=>JSON.stringify([tenantScope,'household-enrollment-workflow',headClientId]);
@@ -514,7 +568,8 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const prepared=[];
     for(const r of snapshots){
      const context={clientId:r.target.clientId,providerId:r.s.providerId,type:r.s.enrollmentType,entryDate:new Date(r.start).toISOString()};
-     const discovered=await discover(context),schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
+     const existing=prior.get(r.target.clientId);
+     const discovered=await discover(context,false,{legacy:Boolean(existing&&!existing.formSnapshot)}),schemaHash=journalSchema(discovered);
      const headQuestion=discovered.entry.definition.questions.find(q=>q.fieldName==='HUD_RELATIONTOHOH');
      if(native&&!headQuestion&&group?.stage!=='verified')fail('native adoption requires original entry head relationship evidence',{code:'ADOPTION_HEAD_EVIDENCE_REQUIRED'});
      if(headQuestion){
@@ -522,9 +577,8 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
       const answer=answers.find(q=>q.virt_field_name==='HUD_RELATIONTOHOH')?.answer_value;
       if(self.length!==1||answer===null||answer===undefined||answer===''||!headQuestion.options.some(o=>String(o.id)===String(answer))||(String(answer)===String(self[0].id))!==(r.target.clientId===head.target.clientId))fail('adoption requires the original enrollment head relationship');
      }
-     const existing=prior.get(r.target.clientId);
      if(existing&&(existing.enrollmentId!==r.target.enrollmentId||canonical(existing.context)!==canonical(context)||existing.schemaHash!==schemaHash))fail('adopted enrollment identity or configuration changed');
-     prepared.push(existing??{version:1,key:household?memberKey(input.key,r.target.clientId):input.key,kind:'entry',adopted:true,intentHash,schemaHash,context,enrollmentId:r.target.enrollmentId,assessmentCode:discovered.entry.assessment.code,stage:'verified',steps:{enrollment:{state:'verified',value:r.target.enrollmentId}},rows:{},ends:[]});
+     prepared.push(existing??{version:1,key:household?memberKey(input.key,r.target.clientId):input.key,kind:'entry',adopted:true,intentHash,schemaHash,...(discovered.schemaRevision?{formSnapshot:discovered}:{}),context,enrollmentId:r.target.enrollmentId,assessmentCode:discovered.entry.assessment.code,stage:'verified',steps:{enrollment:{state:'verified',value:r.target.enrollmentId}},rows:{},ends:[]});
     }
     const wasVerified=household?group?.stage==='verified':prior.get(input.clientId)?.stage==='verified';
     const results=prepared.map(r=>({key:r.key,outcome:wasVerified?'already-present':'verified',clientId:r.context.clientId,enrollmentId:r.enrollmentId,assessmentCode:r.assessmentCode,effectiveDate:r.context.entryDate,recordsetIds:structuredClone(r.rows)}));
@@ -643,12 +697,17 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const toMember=m=>['entry','addition'].includes(kind)?{key:memberKey(input.key,m.clientId),clientId:m.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate,assessment:m.assessment}:{key:memberKey(input.key,m.clientId),enrollmentKey:memberKey(catalog[m.clientId].entryKey,m.clientId),clientId:m.clientId,...(kind==='exit'?{exitDate:input.exitDate}:{reviewDate:input.reviewDate}),assessment:m.assessment};
    // Validate every member before any record mutation. The same client locks cover
    // preflight and execution, including overlaps with the single-client workflow.
-   const preflight=[];for(const member of input.members)preflight.push(await run(kind==='addition'?'entry':kind,toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,preflight:true,...(kind==='addition'?{pinSchema:true}:{})}));
+   const memberRevision=clientId=>record?.memberRevisions?.[clientId];
+   const preflight=[];
+   for(const member of input.members){
+    preflight.push(await run(kind==='addition'?'entry':kind,toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,preflight:true,expectedRevision:memberRevision(member.clientId),...(kind==='addition'?{pinSchema:true}:{})}));
+   }
+   const memberRevisions=Object.fromEntries(input.members.flatMap((member,i)=>preflight[i].schemaRevision?[[member.clientId,preflight[i].schemaRevision]]:[]));
    if(kind==='addition'&&record?.entrySchemas&&canonical(record.entrySchemas)!==canonical(preflight))fail('additional member assessment configuration changed');
    if(kind==='exit'&&record?.exitSchemas&&canonical(record.exitSchemas)!==canonical(preflight))fail('exit assessment configuration changed');
    if(nativeGroupId!==undefined){context.groupId=nativeGroupId;context.householdSource='native-enrollment';entry.context.groupId=nativeGroupId;entry.context.householdSource='native-enrollment';if(record){record.context.groupId=nativeGroupId;record.context.householdSource='native-enrollment';}}
    const wasVerified=record?.stage==='verified';
-   if(!record){record={version:1,key:input.key,kind,intentHash,context,...(input.enrollmentKey?{enrollmentKey:input.enrollmentKey}:{}),clientIds:ids,stage:'pending',members:{},...(kind==='exit'?{exitSchemas:preflight}:kind==='addition'?{entrySchemas:preflight}:{})};records.push(record);}
+   if(!record){record={version:1,key:input.key,kind,intentHash,context,...(input.enrollmentKey?{enrollmentKey:input.enrollmentKey}:{}),clientIds:ids,stage:'pending',members:{},...(Object.keys(memberRevisions).length?{memberRevisions}:{}),...(kind==='exit'?{exitSchemas:preflight}:kind==='addition'?{entrySchemas:preflight}:{})};records.push(record);}
    const persist=()=>store.write(householdScope(input.headClientId),structuredClone(records));await persist();
    for(const clientId of cohortIds)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'pending'}]));
    const writeAttempted=async()=>{
@@ -692,14 +751,14 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
      const existing=await enrollments(api,clientId,{enrollmentSession,writeAttempted:await writeAttempted()});if(existing.some(e=>e.enrollmentProvider===context.providerId&&e.type===context.type&&e.isActive&&e.projectExitDate==null&&restDate(e.projectStartDate)===restDate(context.entryDate)))fail('member already has an independent matching enrollment');
     }
     const head=input.members.find(m=>m.clientId===input.headClientId);
-    const result=await run('entry',toMember(head),{locked:true,owner,operation,headClientId:input.headClientId,findEnrollment:findMember(head.clientId)});record.members[head.clientId]=result;await persist();
+    const result=await run('entry',toMember(head),{locked:true,owner,operation,headClientId:input.headClientId,expectedRevision:memberRevision(head.clientId),findEnrollment:findMember(head.clientId)});record.members[head.clientId]=result;await persist();
     // Reject unexpected members before the attachment helper is allowed to write.
     await readTarget({clientId:head.clientId,enrollmentId:result.enrollmentId},{partial:!record.attached});
     record.attachmentAttempted=true;await persist();
     operation.attempted=true;const attached=await helpers.addHouseholdMembers({clientId:head.clientId,enrollmentId:result.enrollmentId,memberClientIds:ids.filter(id=>id!==head.clientId)});
     const snapshot=validateSnapshot(attached.snapshot,{clientId:head.clientId,enrollmentId:result.enrollmentId});
     for(const m of snapshot.members)record.members[m.clientId]??={clientId:m.clientId,enrollmentId:m.enrollmentId};record.attached=true;await persist();
-    for(const member of input.members.filter(m=>m.clientId!==head.clientId)){record.members[member.clientId]=await run('entry',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,findEnrollment:findMember(member.clientId)});await persist();}
+    for(const member of input.members.filter(m=>m.clientId!==head.clientId)){record.members[member.clientId]=await run('entry',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,expectedRevision:memberRevision(member.clientId),findEnrollment:findMember(member.clientId)});await persist();}
    }else if(kind==='addition'){
     if(!record.anchor){
      for(const clientId of Object.keys(catalog).map(Number).sort((a,b)=>a-b)){
@@ -737,7 +796,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
      const fresh=await readTarget(target);if(!wasVerified&&fresh.exits?.filter(e=>e.clientId===clientId&&e.enrollmentId===target.enrollmentId&&e.projectExitDate===null).length!==1)fail('new member must remain enrolled');
      await preserve();record.entryDates[clientId]='verified';await persist();
     }
-    for(const member of input.members){record.members[member.clientId]=await run('entry',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,findEnrollment:findMember(member.clientId)});await persist();}
+    for(const member of input.members){record.members[member.clientId]=await run('entry',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,expectedRevision:memberRevision(member.clientId),findEnrollment:findMember(member.clientId)});await persist();}
    }else if(kind==='interim'){
     // Verify all linked enrollments before making the single household review call.
     const existingReviews=[];
@@ -762,7 +821,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     // Pin every member's distinct review ID before writing any member's answers.
     for(const clientId of ids){const enrollmentId=catalog[clientId].enrollmentId,{snapshot}=await readReview({clientId,enrollmentId});record.members[clientId]??={clientId,enrollmentId};record.members[clientId].reviewId=snapshot.reviews.find(r=>r.type==='Update'&&restDate(r.reviewDate)===restDate(input.reviewDate)).reviewId;await persist();}
     if(new Set(ids.map(id=>record.members[id].reviewId)).size!==ids.length)fail('duplicate household review IDs');
-    for(const member of input.members){record.members[member.clientId]=await run('interim',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,findEnrollment:findMember(member.clientId),readReview});await persist();}
+    for(const member of input.members){record.members[member.clientId]=await run('interim',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,expectedRevision:memberRevision(member.clientId),findEnrollment:findMember(member.clientId),readReview});await persist();}
    }else if(kind==='exit'){
     const target={clientId:ids[0],enrollmentId:catalog[ids[0]].enrollmentId};
     const normalizeLabel=value=>typeof value==='string'?value.replace(/\s*\(HUD\)\s*$/,'').trim():value;
@@ -801,7 +860,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const readExit=async target=>{
      const result=await inspect();if(!result.found)fail('verified exit missing');return result.exits.find(e=>e.clientId===target.clientId&&e.enrollmentId===target.enrollmentId);
     };
-    for(const member of input.members){record.members[member.clientId]=await run('exit',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,findEnrollment:findMember(member.clientId),readExit});await persist();}
+    for(const member of input.members){record.members[member.clientId]=await run('exit',toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,expectedRevision:memberRevision(member.clientId),findEnrollment:findMember(member.clientId),readExit});await persist();}
    }
    if(kind==='exit'||kind==='addition')await preserve();
    await validateHeadCoverage();
@@ -817,6 +876,10 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   adoptEnrollment:input=>execute('adoptEnrollment',()=>adopt(false,input)),adoptHouseholdEnrollment:input=>execute('adoptHouseholdEnrollment',()=>adopt(true,input)),
   addHouseholdMembers:input=>execute('addHouseholdMembers',operation=>householdRun('addition',input,operation)),
   createHouseholdEnrollment:input=>execute('createHouseholdEnrollment',operation=>householdRun('entry',input,operation)),createHouseholdInterim:input=>execute('createHouseholdInterim',operation=>householdRun('interim',input,operation)),exitHousehold:input=>execute('exitHousehold',operation=>householdRun('exit',input,operation)),
+  invalidateMetadata:async input=>{
+   if(!formCache)fail('durable form metadata is disabled',{code:'FORM_METADATA_DISABLED'});
+   await formCache.invalidate(input);
+  },
   discoverExit:input=>execute('discoverExit',()=>discover(input,true)),
   async getHouseholdStatus(input){
    return execute('getHouseholdStatus',async()=>{

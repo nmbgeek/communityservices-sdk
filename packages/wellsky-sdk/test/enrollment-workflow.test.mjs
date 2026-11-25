@@ -1,7 +1,10 @@
 const testTenant=process.env.WELLSKY_TEST_TENANT??'tenant-b';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createEnrollmentWorkflow} from '@choiceapps/communityservices-sdk/browser';
+import {mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createEnrollmentWorkflow,createFileGwtMutationStore} from '@choiceapps/communityservices-sdk/browser';
 import {createDateOfBirth} from '@choiceapps/communityservices-sdk/browser';
 
 const entryDate='2026-10-19T16:00:00Z',reviewDate='2026-10-22T16:00:00Z';
@@ -841,4 +844,181 @@ test('unavailable scalar evidence after enrollment blocks the first batch withou
   await assert.rejects(f.workflow().createEnrollment(entryInput()),e=>e.code==='MOBILE_PREFLIGHT_UNAVAILABLE'&&e.committed==='unknown'&&e.step==='scalars');
   assert.equal(f.counts.enrollment,1);assert.equal(f.counts.scalars,0);assert.equal((await f.workflow().getStatus({clientId:1,key:'entry-1'})).steps.some(s=>s.name==='scalars'),false);
  }
+});
+
+function cachedWorkflowFixture() {
+ const f=fixture();
+ const calls={catalog:0,mobile:0,generic:0,labels:0};
+ const context={clientId:1,providerId:2,type:'HUD',entryDate};
+ const revisions=[{id:'FY26',effectiveFrom:'2020-01-01T00:00:00Z'}];
+ const raw=(clientId)=>[
+  {question_id:1,virt_field_name:'CHOICE',question_type:'lookup',picklist_id:1,
+   picklist_value_list:[{picklist_value_id:10,picklist_id:1,code:'YES',name:'Yes'}],mandatory_flag:false},
+  {question_id:2,virt_field_name:'ROWS',question_type:'sub_assessment',
+   sub_assessment_answer_list:[{recordset_id:100,sub_assessment_list:[{question_id:3,question_type:'textbox',virt_field_name:'HISTORY_'+clientId,answer_value:'private answer'}]}]},
+ ];
+ const state={mandatory:false,label:'Yes (HUD)',failReads:false};
+ const catalog=f.discovery.getProviderAssessments;
+ f.discovery.getProviderAssessments=async input=>{calls.catalog++;return catalog(input);};
+ f.api.clients.get=async({path})=>({clientId:path.clientId,isActive:true});
+ f.api.enrollments.listForClient=async({path})=>{
+  const values=f.entries.filter(entry=>entry.clientId===path.clientId);
+  return {count:values.length,values:structuredClone(values)};
+ };
+ f.api.assessmentsMobile.getAnswers=async({path})=>{calls.mobile++;return raw(path.clientId);};
+ f.api.assessments.get=async({path})=>{
+  calls.generic++;
+  if(state.failReads)throw Object.assign(Error('timeout'),{kind:'timeout'});
+  const rows=raw(path.clientId);
+  if(path.assessmentCode==='ENTRY')rows[0].mandatory_flag=state.mandatory;
+  return rows;
+ };
+ const enrollmentSession={async readPicklistOptions({clientId}){
+  calls.labels++;return {source:'gwt-rpc',tenant:f.api.tenant,clientId,count:1,values:[{optionId:10,picklistId:1,code:'YES',name:state.label}]};
+ }};
+ const metadataCache={store:f.store,revisions};
+ const worker=()=>f.workflow({metadataCache,enrollmentSession});
+ const input=()=>({...context,key:'cache-entry',assessment:{notApplicable:{CHOICE:'Application decision',ROWS:'Application decision'}}});
+ return {...f,calls,state,context,metadataCache,worker,input};
+}
+
+test('durable discovery reuses configured questions and exact labels across enrollment and worker restarts',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'wellsky-form-metadata-'));
+ t.after(()=>rm(directory,{recursive:true,force:true}));
+ const f=cachedWorkflowFixture();
+ f.metadataCache.store=createFileGwtMutationStore(directory);
+ const worker=f.worker();
+ const cold=await worker.discover(f.context);
+ assert.deepEqual(f.calls,{catalog:1,mobile:2,generic:2,labels:1});
+ const input=f.input();
+ input.assessment.schemaRevision=cold.schemaRevision;
+ await worker.createEnrollment(input);
+ const genericAfterWrite=f.calls.generic;
+ f.metadataCache.store=createFileGwtMutationStore(directory);
+ const warm=await f.worker().discover({...f.context,clientId:2,entryDate:reviewDate});
+ assert.deepEqual(f.calls,{catalog:1,mobile:2,generic:genericAfterWrite,labels:1});
+ assert.equal(warm.schemaRevision,cold.schemaRevision);
+ assert.equal(warm.entry.definition.effectiveDate,new Date(reviewDate).toISOString());
+ assert.equal(warm.writeLabels.values[0].name,'Yes (HUD)');
+ await f.worker().createEnrollment({...input,clientId:2});
+ assert.deepEqual([f.calls.catalog,f.calls.mobile,f.calls.labels],[1,2,1]);
+ assert.deepEqual(f.entries.map(row=>row.clientId),[1,2]);
+ const files=await readdir(directory);
+ assert.equal(files.length,1);
+ assert.doesNotMatch(await readFile(join(directory,files[0]),'utf8'),/HISTORY_|private answer|recordset_id|clientId/);
+});
+
+test('changed required field refreshes only the active phase and returns new discovery before writing',async()=>{
+ const f=cachedWorkflowFixture(),worker=f.worker(),before=await worker.discover(f.context),input=f.input();
+ input.assessment.schemaRevision=before.schemaRevision;
+ f.state.mandatory=true;
+ let revision;
+ await assert.rejects(worker.createEnrollment(input),e=>{
+  assert.equal(e.code,'FORM_REVISION_CHANGED');assert.equal(e.committed,false);
+  assert.equal(e.discovery.entry.definition.questions[0].mandatory,true);
+  revision=e.discovery.schemaRevision;return true;
+ });
+ assert.notEqual(revision,before.schemaRevision);
+ assert.deepEqual([f.calls.catalog,f.calls.mobile,f.calls.labels],[2,3,2]);
+ assert.equal(f.counts.enrollment,0);
+ input.assessment.schemaRevision=revision;
+ await worker.createEnrollment(input);
+ assert.equal(f.counts.enrollment,1);
+});
+
+test('timeouts keep metadata usable and explicit invalidation detects label-only changes',async()=>{
+ const f=cachedWorkflowFixture(),worker=f.worker(),before=await worker.discover(f.context);
+ f.state.failReads=true;
+ await assert.rejects(worker.createEnrollment(f.input()),/timeout/);
+ f.state.failReads=false;
+ assert.equal((await worker.discover(f.context)).schemaRevision,before.schemaRevision);
+ assert.equal(f.calls.catalog,1);
+ await worker.invalidateMetadata(f.context);
+ f.state.label='Updated';
+ const input=f.input();input.assessment.schemaRevision=before.schemaRevision;
+ await assert.rejects(worker.createEnrollment(input),e=>e.code==='FORM_REVISION_CHANGED'&&e.discovery.writeLabels.values[0].name==='Updated');
+ assert.equal(f.counts.enrollment,0);
+});
+
+test('an uncertain enrollment reconciles against its original form after invalidation without resending',async()=>{
+ const f=cachedWorkflowFixture(),worker=f.worker(),input=f.input();
+ input.assessment.schemaRevision=(await worker.discover(f.context)).schemaRevision;
+ const create=f.api.enrollments.createEntryAssessment,list=f.api.enrollments.listForClient;
+ let offline=false;
+ f.api.enrollments.createEntryAssessment=async args=>{await create(args);offline=true;throw Error('lost response');};
+ f.api.enrollments.listForClient=async args=>{if(offline)throw Error('temporarily unavailable');return list(args);};
+ await assert.rejects(worker.createEnrollment(input),e=>e.committed==='unknown');
+ offline=false;f.state.mandatory=true;await worker.invalidateMetadata(f.context);
+ assert.equal((await f.worker().createEnrollment(input)).enrollmentId,50);
+ assert.equal(f.counts.enrollment,1);
+});
+
+test('backdated discovery selects a captured revision and refuses an uncaptured historical form',async()=>{
+ const f=cachedWorkflowFixture();
+ const old=await f.worker().discover({...f.context,entryDate:'2021-01-01T00:00:00Z'});
+ f.metadataCache.revisions.push({id:'next',effectiveFrom:'2022-01-01T00:00:00Z'});
+ f.state.mandatory=true;
+ const next=f.worker();
+ const newer=await next.discover(f.context);
+ assert.notEqual(newer.schemaRevision,old.schemaRevision);
+ assert.equal((await next.discover({...f.context,entryDate:'2021-12-31T23:59:59Z'})).schemaRevision,old.schemaRevision);
+ await assert.rejects(next.discoverExit({...f.context,entryDate:'2021-01-01T00:00:00Z'}),e=>e.code==='FORM_REVISION_UNAVAILABLE');
+});
+
+
+test('a rejected assessment write refreshes changed labels once and preserves the attempted write',async()=>{
+ const f=cachedWorkflowFixture(),worker=f.worker(),input=f.input();
+ const catalog=await worker.discover(f.context);
+ input.assessment={schemaRevision:catalog.schemaRevision,answers:{CHOICE:{option:{code:'YES'}}},notApplicable:{ROWS:'Application decision'}};
+ let sends=0;
+ f.api.assessmentsMobile.addAnswer=async()=>{
+  sends++;f.state.label='New verified label';
+  throw Object.assign(Error('stale option'),{kind:'http',status:422,operation:'POST /assessmentsmobile/AddAssessmentAnswer'});
+ };
+ await assert.rejects(worker.createEnrollment(input),error=>{
+  assert.equal(error.code,'FORM_REVISION_CHANGED');assert.equal(error.committed,'unknown');
+  assert.equal(error.discovery.writeLabels.values[0].name,'New verified label');return true;
+ });
+ assert.deepEqual([f.calls.catalog,f.calls.mobile,f.calls.labels],[2,3,2]);
+ await assert.rejects(f.worker().createEnrollment(input),e=>e.committed==='unknown' && e.step==='scalars');
+ assert.equal(sends,1);
+});
+
+test('an interim spanning a rollout checks the entry journal and accepts the new pinned review plan',async()=>{
+ const f=cachedWorkflowFixture();
+ const worker=f.worker(),input=f.input();
+ input.assessment.schemaRevision=(await worker.discover(f.context)).schemaRevision;
+ await worker.createEnrollment(input);
+ f.metadataCache.revisions.push({id:'rollout',effectiveFrom:'2026-10-21T00:00:00Z'});
+ f.state.mandatory=true;
+ const next=f.worker(),catalog=await next.discover({...f.context,entryDate:reviewDate});
+ const review={key:'new-review',enrollmentKey:input.key,clientId:1,reviewDate,assessment:{notApplicable:input.assessment.notApplicable}};
+ await assert.rejects(next.createInterim(review),e=>e.code==='FORM_REVISION_CHANGED'&&e.committed===false);
+ assert.equal(f.counts.review,0);
+ review.assessment.schemaRevision=catalog.schemaRevision;
+ assert.equal((await next.createInterim(review)).reviewId,60);
+ assert.equal(f.counts.review,1);
+});
+
+test('metadata scopes isolate tenants, deployments, provider IDs and entry/exit types',async()=>{
+ const f=cachedWorkflowFixture();
+ const providers=f.api.providers.list,defaults=f.discovery.getProviderAssessments;
+ f.api.providers.list=async()=>{
+  const {values:[first]}=await providers();
+  return {count:2,values:[first,{...first,providerId:3}]};
+ };
+ f.discovery.getProviderAssessments=async input=>{
+  const response=await defaults(input);
+  return {...response,defaults:[...response.defaults,...response.defaults.map(item=>({...item,location:item.location.replace('Hud','Va')}))]};
+ };
+ await f.worker().discover(f.context);
+ await f.worker().discover({...f.context,providerId:3});
+ await f.worker().discover({...f.context,type:'VA'});
+ f.api.tenant='another-tenant';
+ await f.worker().discover(f.context);
+ f.api.baseUrl='https://other-api.example.test';
+ await f.worker().discover(f.context);
+ assert.equal(f.calls.catalog,5);
+ await f.worker().discover(f.context);
+ assert.equal(f.calls.catalog,5);
 });

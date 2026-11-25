@@ -32,7 +32,7 @@ export async function enrollAndReview(
   // Plans must explicitly cover applicable fields and all required verification types.
   const enrollmentKey=`${input.sourceId}:entry`;
   const entry=await workflow.createEnrollment({
-    ...context,key:enrollmentKey,assessment:input.buildEntryPlan(catalog),
+    ...context,key:enrollmentKey,assessment:{...input.buildEntryPlan(catalog), ...(catalog.schemaRevision ? {schemaRevision:catalog.schemaRevision} : {})},
   });
   // Use entry.recordsetIds and the discovered startDateField/endDateField names
   // when ending a changed verification row. Carry forward
@@ -40,10 +40,11 @@ export async function enrollAndReview(
   // On a rejected operation, call workflow.getStatus({clientId, key}) with that
   // operation's original key. Inspect the attempted steps before retrying the
   // same intent. Never remove the journal or generate a fresh key to bypass it.
+  const reviewCatalog=await workflow.discover({...context,entryDate:input.reviewDate});
   const interim=await workflow.createInterim({
     key:`${input.sourceId}:interim:${input.reviewDate}`,enrollmentKey,
     clientId:input.clientId,reviewDate:input.reviewDate,
-    assessment:input.buildInterimPlan(entry,catalog),
+    assessment:{...input.buildInterimPlan(entry,reviewCatalog), ...(reviewCatalog.schemaRevision ? {schemaRevision:reviewCatalog.schemaRevision} : {})},
   });
   return {entry,interim};
 }

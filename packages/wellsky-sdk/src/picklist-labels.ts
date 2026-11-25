@@ -5,13 +5,14 @@ import {ValidationError} from './errors.js';
 
 export interface PicklistCatalogOption {optionId:number;picklistId:number;code:string|null;name:string;}
 export interface PicklistCatalogSnapshot {source:'gwt-rpc';tenant:string;clientId:number;count:number;values:PicklistCatalogOption[];}
+export interface FormWriteLabels {source:'form-metadata';tenant:string;count:number;values:PicklistCatalogOption[];}
 export type CatalogWriteLabelResolver = NonNullable<EncodingOptions['writeLabel']> & {readonly tenant:string};
 
 /** Exact catalog names joined by identity, without reading any stored answer.
  * Only choices present in the supplied assessment definition can resolve. */
-export function createCatalogWriteLabelResolver(definition:AssessmentDefinition,catalog:PicklistCatalogSnapshot):CatalogWriteLabelResolver{
+export function createCatalogWriteLabelResolver(definition:AssessmentDefinition,catalog:PicklistCatalogSnapshot | FormWriteLabels):CatalogWriteLabelResolver{
  const fail=()=>{throw new ValidationError('incomplete or mismatched picklist label catalog');};
- if(catalog?.source!=='gwt-rpc'||catalog.tenant!==definition.tenant||!Number.isSafeInteger(catalog.clientId)||catalog.clientId<=0||!Array.isArray(catalog.values)||catalog.count!==catalog.values.length)fail();
+ if(!catalog || (catalog.source!=='form-metadata' && (catalog.source!=='gwt-rpc'||!Number.isSafeInteger(catalog.clientId)||catalog.clientId<=0)) || catalog.tenant!==definition.tenant||!Array.isArray(catalog.values)||catalog.count!==catalog.values.length)fail();
  const rows=new Map<number,PicklistCatalogOption>();
  for(const row of catalog.values){
   if(!row||!Number.isSafeInteger(row.optionId)||row.optionId<=0||!Number.isSafeInteger(row.picklistId)||row.picklistId<=0||row.code!==null&&typeof row.code!=='string'||typeof row.name!=='string'||!row.name.trim()||rows.has(row.optionId))fail();

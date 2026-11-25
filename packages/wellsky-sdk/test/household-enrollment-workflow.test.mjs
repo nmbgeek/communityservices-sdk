@@ -588,3 +588,22 @@ for(const type of uiEntryExitTypes)test(`${type}: an attempted uncertain member-
  for(let i=0;i<2;i++)await assert.rejects(workflow.addHouseholdMembers(additionInput()),e=>e.committed==='unknown');
  assert.equal(f.additionCounts.date,1);assert.equal(f.entries.filter(e=>e.clientId===3).length,1);
 });
+
+test('household member preflight and execution share configured forms while keeping member answers separate',async()=>{
+ const f=fixture(), counts={catalog:0,mobile:0}, original=f.discovery.getProviderAssessments;
+ f.discovery.getProviderAssessments=async input=>{counts.catalog++;return original(input);};
+ const raw=metadata.map(function convert(q){
+  return {question_id:q.questionId,virt_field_name:q.fieldName,question_type:q.questionType,sub_assessment_question_list:q.children.map(convert)};
+ });
+ f.api.assessmentsMobile.getAnswers=async()=>{counts.mobile++;return structuredClone(raw);};
+ const get=f.api.assessments.get;
+ f.api.assessments.get=async args=>{
+  const rows=await get(args);
+  return rows.map((row,i)=>({...raw[i],...row}));
+ };
+ const worker=createEnrollmentWorkflow({...f,metadataCache:{store:f.store,revisions:[{id:'v1',effectiveFrom:'2020-01-01T00:00:00Z'}]}});
+ const result=await worker.createHouseholdEnrollment(entryInput());
+ assert.deepEqual(counts,{catalog:1,mobile:2});
+ assert.deepEqual(result.members.map(m=>m.clientId),[1,2]);
+ assert.equal(new Set(result.members.flatMap(m=>Object.values(m.recordsetIds))).size,4);
+});

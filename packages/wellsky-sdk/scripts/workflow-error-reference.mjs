@@ -42,7 +42,7 @@ export function collectWorkflowErrors(mapText,sources,codeOnlySources={}){
 }
 
 export function workflowErrorReference(){
- const files=['enrollment-workflow','entry-correction','entry-row-registration','household-enrollment-discovery'];
+ const files=['enrollment-workflow','entry-correction','entry-row-registration','household-enrollment-discovery','form-metadata'];
  const entries=collectWorkflowErrors(readFileSync('browser/workflow-error-codes.mjs','utf8'),Object.fromEntries(files.map(file=>[file,readFileSync(`browser/${file}.mjs`,'utf8')])),{'member-entry-date':readFileSync('browser/member-entry-date.mjs','utf8')});
  const cell=text=>text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('|','&#124;').replaceAll('\n',' ');
  return [

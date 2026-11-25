@@ -81,7 +81,7 @@ function options(value: unknown): PicklistOption[] {
   });
 }
 
-function mergeQuestions(documents: unknown[], depth = 0): QuestionDefinition[] {
+function mergeQuestions(documents: unknown[], includeHistory: boolean, depth = 0): QuestionDefinition[] {
   if (depth > 30) throw new WellSkyError("protocol", "assessment metadata");
   const merged = new Map<string, QuestionDefinition>();
   const childSources = new Map<string, unknown[]>();
@@ -113,10 +113,10 @@ function mergeQuestions(documents: unknown[], depth = 0): QuestionDefinition[] {
     });
     const children = childSources.get(key) ?? [];
     if (raw.sub_assessment_question_list != null) children.push(raw.sub_assessment_question_list);
-    for (const record of rows(raw.sub_assessment_answer_list ?? [])) if (record.sub_assessment_list != null) children.push(record.sub_assessment_list);
+    if (includeHistory) for (const record of rows(raw.sub_assessment_answer_list ?? [])) if (record.sub_assessment_list != null) children.push(record.sub_assessment_list);
     childSources.set(key, children);
   }
-  for (const [key, question] of merged) question.children = mergeQuestions(childSources.get(key) ?? [], depth + 1);
+  for (const [key, question] of merged) question.children = mergeQuestions(childSources.get(key) ?? [], includeHistory, depth + 1);
   return [...merged.values()].sort((a, b) => (a.displayOrder ?? Infinity) - (b.displayOrder ?? Infinity) || a.questionId - b.questionId);
 }
 
@@ -127,9 +127,14 @@ export function flattenQuestions(questions: readonly QuestionDefinition[], paren
   });
 }
 
+// Used to compare the configured portion of dated reads, including an empty form projection.
+export function configuredAssessmentQuestions(document: unknown): QuestionDefinition[] {
+  return mergeQuestions([document], false);
+}
+
 /** Only metadata fields are copied; no answers, client IDs, recordsets, or staff IDs survive. */
-export function buildAssessmentDefinition(input: { tenant: string; assessmentCode: string; effectiveDate?: string; mobile: unknown; generic: unknown }): AssessmentDefinition {
-  const questions = mergeQuestions([input.mobile, input.generic]);
+export function buildAssessmentDefinition(input: { tenant: string; assessmentCode: string; effectiveDate?: string; mobile: unknown; generic: unknown; configuredOnly?: boolean }): AssessmentDefinition {
+  const questions = mergeQuestions([input.mobile, input.generic], !input.configuredOnly);
   if (!questions.length) throw new WellSkyError("protocol", "assessment metadata");
   return { tenant: input.tenant, assessmentCode: input.assessmentCode, effectiveDate: input.effectiveDate ?? null, retrievedAt: new Date().toISOString(), picklistEffectiveDate: "current", questions, unresolvedPicklists: flattenQuestions(questions).filter(({ question }) => question.questionType === "lookup" && !question.options.length).map(({ path }) => path.join("/")) };
 }

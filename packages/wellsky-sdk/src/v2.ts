@@ -15,4 +15,4 @@ export * from "./mobile-preflight.js";
 export * from "./write-labels.js";
 
 export {createCatalogWriteLabelResolver} from './picklist-labels.js';
-export type {PicklistCatalogOption,PicklistCatalogSnapshot,CatalogWriteLabelResolver} from './picklist-labels.js';
+export type {FormWriteLabels,PicklistCatalogOption,PicklistCatalogSnapshot,CatalogWriteLabelResolver} from './picklist-labels.js';

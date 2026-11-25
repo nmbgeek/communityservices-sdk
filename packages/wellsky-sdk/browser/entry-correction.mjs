@@ -15,7 +15,7 @@ export function correctionFailureDetails(error){
 }
 
 /** Internal correction writer. The workflow supplies its existing client locks and journal scopes. */
-export function createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,scope,reservationScope,makeError}){
+export function createEntryCorrector({api,store,enrollmentSession,writeLabel,discover,refreshAfter,changed,scope,reservationScope,makeError}){
  const fail=reason=>{throw makeError(reason);};
  const fields=(v,allowed)=>{if(!object(v)||Object.keys(v).some(k=>!allowed.includes(k)))fail('unknown or invalid correction fields');};
  const key=v=>{if(typeof v!=='string'||!v.trim()||v.length>200)fail('stable correction key required');};
@@ -59,6 +59,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
   if(resolving){key(input.evidenceReference);if(typeof confirmNotApplied!=='function')fail('independent non-application confirmation required');}
   if(!positive(input.clientId)||!Array.isArray(input.subassessments??[]))fail('invalid correction client or rows');
   if(typeof api.assessments?.create!=='function'||typeof enrollmentSession?.readEnrollment!=='function')fail('standard assessment writes and authoritative enrollment reader required for corrections');
+  let refreshOnDrift;
   return store.withLock(scope(input.clientId),async()=>{
    const reservations=await store.withLock(reservationScope(input.clientId),()=>store.read(reservationScope(input.clientId)));
    if(!Array.isArray(reservations)||reservations.some(r=>r.stage!=='verified'))fail('unfinished household workflow must be reconciled first');
@@ -92,10 +93,14 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
     if(exits?.length!==1||exits[0].projectExitDate!==null||!Array.isArray(s.reviews)||s.reviews.length)fail('entry correction requires an open enrollment without reviews');
    };
    await verifyEnrollment();
-   const discovered=await discover({clientId:input.clientId,providerId,type,entryDate:at});
+   const discoveryInput={clientId:input.clientId,providerId,type,entryDate:at};
+   const currentForms=await discover(discoveryInput,false,{legacy:!entry.formSnapshot});
+   refreshOnDrift=cause=>refreshAfter(discoveryInput,'entry',currentForms,cause);
+   const frozen=record?.formSnapshot && record.formSnapshot.schemaRevision!==currentForms.schemaRevision;
+   const discovered=frozen?record.formSnapshot:currentForms;
    const schemaHash=hash({providerId:discovered.provider.providerId,entry:{assessment:discovered.entry.assessment,questions:discovered.entry.definition.questions},interim:{assessment:discovered.interim.assessment,questions:discovered.interim.definition.questions}});
    if(schemaHash!==entry.schemaHash||record&&schemaHash!==record.schemaHash)fail('program assessment configuration changed');
-   const definition=discovered.entry.definition,operationWriteLabel=writeLabel??(discovered.picklistOptions?createCatalogWriteLabelResolver(discovered.entry.definition,discovered.picklistOptions):undefined),code=definition.assessmentCode;
+   const definition=discovered.entry.definition,operationWriteLabel=writeLabel??(discovered.writeLabels||discovered.picklistOptions?createCatalogWriteLabelResolver(discovered.entry.definition,discovered.writeLabels??discovered.picklistOptions):undefined),code=definition.assessmentCode;
    const raceQuestion=definition.questions.find(q=>q.fieldName==='HUD_RACEETHNICITY');
    const checksRace=Object.hasOwn(input.answers??{},'HUD_RACEETHNICITY')||(input.clear??[]).includes('HUD_RACEETHNICITY')||raceQuestion?.mandatory;
    if((input.clear??[]).includes('HUD_RACEETHNICITY'))fail('Race and Ethnicity must use an explicit category or missing-answer state');
@@ -179,7 +184,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
      rowPlans.push({id,parentField:parent.fieldName,questionId:parent.questionId,cells});
     }
     if(!scalarBody.length&&!rowPlans.length)fail('empty entry correction');
-    record={version:1,key:input.key,kind:'correction',enrollmentKey:input.enrollmentKey,intentHash,schemaHash,context:structuredClone(entry.context),enrollmentId:entry.enrollmentId,assessmentCode:code,stage:'pending',steps:{},rows:structuredClone(entry.rows),before:{scalars:observed.scalars,rows:observed.rows},scalarBody,scalarExpected,rowPlans};records.push(record);
+    record={version:1,key:input.key,kind:'correction',enrollmentKey:input.enrollmentKey,intentHash,schemaHash,...(discovered.schemaRevision?{formSnapshot:discovered}:{}),context:structuredClone(entry.context),enrollmentId:entry.enrollmentId,assessmentCode:code,stage:'pending',steps:{},rows:structuredClone(entry.rows),before:{scalars:observed.scalars,rows:observed.rows},scalarBody,scalarExpected,rowPlans};records.push(record);
    }
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const inspect=async(candidate,complete=false)=>{
@@ -197,6 +202,7 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
     let found;try{found=await inspect(name);}catch(readError){if(record.steps[name])throw uncertain(readError);throw readError;}
     if(found){record.steps[name]={state:'verified'};await persist();return;}
     if(record.steps[name])throw uncertain();
+    if(frozen)changed(currentForms);
     if(!await inspect(null))fail('entry changed since correction preflight');
     await verifyEnrollment();record.steps[name]={state:'attempted'};await persist();let cause;
     operation.attempted=true;try{await submit();}catch(e){
@@ -214,6 +220,9 @@ export function createEntryCorrector({api,store,enrollmentSession,writeLabel,dis
    entry.correctedScalars??={};for(const q of record.scalarExpected)entry.correctedScalars[q.virt_field_name]=q;
    entry.correctedRows??={};for(const plan of record.rowPlans){entry.correctedRows[plan.parentField]??={};entry.correctedRows[plan.parentField][plan.id]??={};for(const q of plan.cells)entry.correctedRows[plan.parentField][plan.id][q.virt_field_name]=q;}
    record.stage='verified';await persist();return result('verified');
+  }).catch(async error=>{
+   if(refreshOnDrift)await refreshOnDrift(error);
+   throw error;
   });
  };
  return {correctEntry:(raw,operation)=>run('correct',raw,operation),resolveEntryCorrection:raw=>run('resolve',raw)};

@@ -107,6 +107,29 @@ See the [packaged enrollment example](../examples/enrollment-workflow.mts) for a
 
 [Live workflow acceptance](capabilities.md) covers a new synthetic client, exact entry/interim UI values, all verification table pages, and repeated calls with zero REST writes or GWT creations. [DOB workflow acceptance](capabilities.md) covers a leap-day DOB, distinct household member DOBs, a later-entry newborn, and repeated entry/interim operations after later assessment changes.
 
+### Reuse configured forms across workers
+
+Pass a shared durable store and the effective instants of your program's form revisions when constructing the workflow. Each revision applies until the next one starts. Use the same revision IDs and dates on every worker serving that program.
+
+```ts
+const workflow = createEnrollmentWorkflow({
+  ...dependencies,
+  metadataCache: {
+    store: formStore,
+    revisions: [{ id: 'FY26', effectiveFrom: '2025-10-01T00:00:00Z' }],
+  },
+});
+const catalog = await workflow.discover(context);
+const assessment = { ...buildPlan(catalog.entry.definition), schemaRevision: catalog.schemaRevision };
+await workflow.createEnrollment({ ...context, key, assessment });
+```
+
+Discovery and household member preflight share provider defaults, configured questions and exact catalog write labels. Client eligibility, provider availability, answers and enrollment verification still require live reads. Cached discovery returns configured questions. Use the existing client-scoped `api.assessments.getDefinition` to inspect fields from historical answer rows. Automatic write labels are available in `discovery.writeLabels`. Share the metadata store only among workers authorized to use the same catalog.
+
+Add a revision at rollout and retain the old one for backdated work. Capture the phases you need with `discover` or `discoverExit` while the revision is active. WellSky exposes current browser defaults and labels. An uncaptured historical phase raises `FORM_REVISION_UNAVAILABLE`. To clear the configured provider, type and revision after an in-place change, call `workflow.invalidateMetadata({providerId, type, entryDate})`.
+
+Pin each member's plan using its discovery's `schemaRevision`. A recognized schema error triggers one read-only refresh of the affected phase and its provider defaults. On `FORM_REVISION_CHANGED`, use `error.discovery` to rebuild a plan if the operation has not started. After a possible write, resume with the original key and intent. The workflow uses the original journal for reconciliation and blocks new submissions against a changed form.
+
 ### Yes/no answers
 
 Mobile answer writes store yes/no values empty (see [yes/no acceptance](assessments.md#yesno-answer-acceptance)). With the default `yesNoWrites: 'mobile'`, a plan that answers a yes/no question leaves its `scalars` stage pending. To save those answers, construct the workflow with the standard endpoint:

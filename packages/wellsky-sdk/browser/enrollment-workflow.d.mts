@@ -1,7 +1,7 @@
 import type {EntryExitType} from './entry-exit-types.mjs';
 export type {EntryExitType} from './entry-exit-types.mjs';
 import type {DateOfBirth} from './date-of-birth.mjs';
-import type {PicklistCatalogSnapshot, Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
+import type {FormWriteLabels, PicklistCatalogSnapshot, Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
 import type {UiMutationStore,EnrollmentReader} from './index.mjs';
 import type {ProviderAssessmentItem, ProgramDiscovery} from './program-discovery.mjs';
 import type {HouseholdExitUi,HouseholdExitDetailInput} from './household-exit.mjs';
@@ -25,6 +25,8 @@ export interface EnrollmentEndDatePlan {
  * explicit applicability reason, or a nonempty value to carry forward.
  * The application determines applicability and required verification types. */
 export interface EnrollmentAssessmentPlan {
+  /** Revision returned by discovery when building this plan. */
+  schemaRevision?:string;
   /** SVPPROFDOB requires {value:'YYYY-MM-DD'} and the birthDates dependency. Other date answers remain timestamps. */
   answers?:Answers;
   subassessments?:EnrollmentSubassessmentPlan[];
@@ -42,6 +44,9 @@ export interface EnrollmentDiscoveryInput {
   entryDate:string;
 }
 export interface EnrollmentWorkflowDiscovery {
+  formRevision?:string;
+  schemaRevision?:string;
+  writeLabels?:FormWriteLabels;
   /** Current exact label catalog when automatic browser discovery is available. */
   picklistOptions?:PicklistCatalogSnapshot;
   provider:Provider;
@@ -153,6 +158,7 @@ export interface EnrollmentWorkflowStatus {
   resolution?:EntryCorrectionResolution;
 }
 export interface EnrollmentWorkflow {
+  invalidateMetadata(input:Omit<EnrollmentDiscoveryInput,'clientId'>):Promise<void>;
   discover(input:EnrollmentDiscoveryInput):Promise<EnrollmentWorkflowDiscovery>;
   discoverExit(input:EnrollmentDiscoveryInput):Promise<ExitWorkflowDiscovery>;
   createEnrollment(input:EnrollmentWorkflowInput):Promise<EnrollmentWorkflowResult>;
@@ -241,6 +247,8 @@ export interface HouseholdWorkflowStatus {
   members:Array<{clientId:number;key:string}&Partial<Omit<InterimWorkflowResult&ExitWorkflowResult,'clientId'|'key'>>>;
 }
 export interface EnrollmentWorkflowOptions {
+  /** Each revision applies from its UTC instant until the next revision. Capture a revision while its forms are live. */
+  metadataCache?:{store:UiMutationStore;revisions:readonly {id:string;effectiveFrom:string}[]};
   /** HUD/VA have built-in mappings. Other types require locations from current provider discovery.
    * A mapping replaces all built-in locations for that type. Retain it across retries. */
   assessmentLocations?:Partial<Record<EntryExitType,EnrollmentAssessmentLocations>>;
@@ -265,6 +273,7 @@ export interface EnrollmentWorkflowOptions {
   writeLabel?:EncodingOptions['writeLabel'];
 }
 export class EnrollmentWorkflowError extends Error {
+  readonly discovery?:EnrollmentWorkflowDiscovery|ExitWorkflowDiscovery;
   readonly reason:string;
   readonly code:string;
   readonly committed:false|'unknown';

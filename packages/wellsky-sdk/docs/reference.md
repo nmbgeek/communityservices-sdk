@@ -14,6 +14,7 @@ Runtime exports at the root: `SubassessmentRecordsetError`, `MobileAnswerPreflig
 | --- | --- | --- |
 | HTTP clients and generated models | [V3](../dist/esm/generated/v3.d.ts), [V2](../dist/esm/generated/v2.d.ts) | [REST](rest-client.md), [API table](../API.md) |
 | Authentication, transport, responses and errors | [Runtime](../dist/esm/runtime.d.ts) | [Configuration](configuration.md), [recovery](troubleshooting.md) |
+| Configured questions | `configuredAssessmentQuestions` extracts the declared fields from one REST response. | [Assessments](assessments.md) |
 | Metadata and picklists | [Metadata](../dist/esm/metadata.d.ts) | [Assessments](assessments.md) |
 | Checked mobile inserts and exact lookup labels | [Preflight](../dist/esm/mobile-preflight.d.ts), [readback labels](../dist/esm/write-labels.d.ts), [catalog labels](../dist/esm/picklist-labels.d.ts) | [Assessments](assessments.md) |
 | Answer encoding | [Encoding](../dist/esm/encoding.d.ts) | [Dates and answers](dates-and-answers.md) |
@@ -37,7 +38,7 @@ Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`
 | Profile fields and Sex | [Client profile](../browser/client-profile.d.mts) | `read`, `update` |
 | Calendar DOB | [Birth dates](../browser/date-of-birth.d.mts) | `read`, `validate`, `verify`, `update` |
 | Provider assessment defaults | [Discovery](../browser/program-discovery.d.mts) | `listAssessments`, `getProviderAssessments` |
-| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, entry, `correctEntry`, `resolveEntryCorrection`, `adoptEnrollment`, `adoptHouseholdEnrollment`, `discoverHouseholdEnrollment`, `registerEntryRows`, native household/group identity, member additions, interim, `exitEnrollment`, `exitHousehold`, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
+| Enrollment and household lifecycle | [Workflow](../browser/enrollment-workflow.d.mts) | Discovery, durable form revisions, `invalidateMetadata`, entry, `correctEntry`, `resolveEntryCorrection`, `adoptEnrollment`, `adoptHouseholdEnrollment`, `discoverHouseholdEnrollment`, `registerEntryRows`, native household/group identity, member additions, interim, `exitEnrollment`, `exitHousehold`, journal status; `EntryExitType` and per-type `assessmentLocations` in [enrollments](enrollments.md) |
 | Entry-date and exit UI ports | [Member entry](../browser/member-entry-date.d.mts), [exit](../browser/household-exit.d.mts) | Pre-attachment `validateMemberEntryDatePlan`, fresh cohort reads, all nine `EntryExitType` labels and targeted completion |
 | Services and recovery diagnostics | [Service recording](../browser/service-recording.d.mts) | `record`, `recordBulk`, Funding Sources, `RecoveryDiagnostic` |
 | SSVF conditional rules | [SSVF types](../browser/ssvf-rules.d.mts) | [Field rules](../SSVF.md) and dated option snapshots |
