@@ -16,7 +16,6 @@ htmlcov/
 
 # Local agent tools and indexes
 .claude/
-.gitnexus/
 .cache/
 
 # next.js

@@ -80,19 +80,4 @@ The package uses the `0.x` release series. Read the current version from `packag
 
 The private registry is GitLab project `48`, `nmbgeek/communityservices-sdk`. See [the release procedure](packages/wellsky-sdk/docs/development.md#gitlab-ci-releases). A matching version tag triggers publication after all three verification jobs pass. A default-branch pipeline can also publish with an explicit matching `RELEASE_VERSION`. The publish job uses `CI_JOB_TOKEN`, verifies the uploaded artifact's integrity, and installs it for consumer checks. Confirm pipeline and registry results before reporting a release as available.
 
-## GitNexus checks
-
-Use the GitNexus MCP tools for code exploration and impact analysis. The registered index for this checkout is `communityservices-sdk`; use `list_repos` to resolve it if the checkout or registration changes. Do not infer the index name from the local folder name or rely on stored symbol counts.
-
-- Before editing any function, class, or method, run `impact({repo: "communityservices-sdk", target: "symbolName", direction: "upstream"})`. Disambiguate by file or symbol UID where necessary. Report direct callers, affected processes, and risk to the user.
-- Warn the user before proceeding when impact is HIGH or CRITICAL. Never ignore these findings.
-- Use `query({repo: "communityservices-sdk", search_query: "concept"})` to explore unfamiliar execution flows, then `context` for callers and callees.
-- Use `rename` with a preview for symbol renames, not find-and-replace. Verify declaration files and imports as well as implementations; an incomplete preview is not evidence that no other references exist.
-- Before every commit, run `detect_changes` and review the affected scope. For branch regression review, compare against the current default branch with `scope: "compare"` and `base_ref: "origin/main"` after fetching it.
-- For security reviews, `explain` can report source-to-sink findings when the index was built with `--pdg`.
-
-Refresh stale indexes from the repository root with `node .gitnexus/run.cjs analyze --index-only`. Use `--force --index-only` when a clean rebuild is necessary. `--index-only` preserves these maintained instruction files. If the local runner is absent, use the installed GitNexus CLI or `npx gitnexus analyze --index-only`.
-
-Index resources include `gitnexus://repo/communityservices-sdk/context`, `/clusters`, `/processes`, and `/process/{name}`. GitNexus skills may be installed under `.claude/skills/gitnexus`; use the available exploring, impact-analysis, debugging, refactoring, guide, or CLI skill for the relevant task.
-
 When interacting with Cloudflare, use the `cf` CLI unless the project has a Wrangler configuration file.

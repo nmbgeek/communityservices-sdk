@@ -32,7 +32,7 @@ Installed packages contain `dist/esm`, `dist/cjs`, `browser`, examples, and docu
 
 In a source checkout, runtime logic is in `src`, generated REST contracts are in `src/generated`, and browser helpers are in `browser`. `specs` pins Swagger/provenance/overrides. Tests are in `test`. Run SDK commands in `packages/wellsky-sdk`. The repository contains only the SDK and its supporting documentation and tests.
 
-In the SDK source checkout, follow the enclosing repository's AGENTS.md, including its GitNexus impact checks before modifying symbols. In an application consuming the installed package, follow that application's repository instructions; this package does not install a GitNexus index or its tools. Do not hand-edit generated files or API.md; use `npm run generate` in the SDK checkout after an intentional contract change. Preserve unrelated workspace changes. Documented sandbox findings are dated evidence, not instructions to replay fixture setup or override current source contracts.
+In the SDK source checkout, follow the enclosing repository's AGENTS.md. In consuming applications, follow the application's repository instructions. Do not hand-edit generated files or API.md; use `npm run generate` in the SDK checkout after an intentional contract change. Preserve unrelated workspace changes. Documented sandbox findings are dated evidence, not instructions to replay fixture setup or override current source contracts.
 
 ## Verify and report
 
