@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.3 - 2026-11-25
+
+- Wait for the WellSky username form to finish initializing before submission and recognize the labelled Google Authenticator link in Okta’s factor chooser. Accept both dashboard URL forms during sign-in, session checks, and password recovery. Fixes #16.
+
 ## 0.14.2 - 2026-11-25
 
 - Expose `durableDiscovery` on individual and household workflow status when the operation captured form revisions. Entry status includes the original `entryDate`. Restarted workers can select discovery from the journal before rebuilding a plan, including a pending household or an Interim Review on a legacy entry. Fixes #15.

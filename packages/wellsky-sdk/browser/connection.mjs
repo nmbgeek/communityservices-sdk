@@ -1,3 +1,4 @@
+export const dashboardHashes = ['#mainPage', '#mainPage;'];
 const moduleSuffix = '/com.bowmansystems.sp5.core.ServicePoint/';
 const defaultOrigin = 'https://wscs.wellsky.com';
 const defaultApi = 'https://csclientapi.wellsky.com/client-api-prod';

@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {openUiSession} from '../browser/index.mjs';
+import {probeAuthentication, waitForLogin} from '../browser/password-recovery.mjs';
 import {readOktaOrigin, totpCode} from '../browser/okta-login.mjs';
 
 const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
@@ -29,7 +30,7 @@ const chromePath = process.env.WELLSKY_TEST_CHROME;
 const button = '<button type="submit">Continue</button>';
 const widget = (action, fields) => `<main id="okta-sign-in"><form method="POST" action="/${action}">${fields}${button}</form></main>`;
 
-async function withFixture({idp = origin, seed = secret} = {}, run) {
+async function withFixture({idp = origin, seed = secret, delayedStartup = false, labelledFactors = false, dashboard = 'plain'} = {}, run) {
   const {chromium} = await import('playwright-core');
   const temp = await mkdtemp(join(tmpdir(), 'wellsky-okta-'));
   const browser = await chromium.launch({executablePath: chromePath});
@@ -44,10 +45,27 @@ async function withFixture({idp = origin, seed = secret} = {}, run) {
     const body = new URLSearchParams(req.postData() ?? '');
     let html;
     if (url.origin === new URL(app).origin) {
-      html = `<input id="formfield-login"><button id="LoginView.fbtn_submit"
-        onclick="location.href='${idp}/identify'">Next</button>`;
-      if (url.searchParams.has('verified')) {
-        html = "<script>location.hash='mainPage'</script>Home Page Dashboard";
+      if (url.pathname.endsWith('/startup')) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        return route.fulfill({body:'Ready'});
+      }
+      if (url.searchParams.has('verified') || (url.pathname.endsWith('/index.html') && (await req.headerValue('cookie'))?.includes('fixtureAuth=1'))) {
+        const hash = dashboard === 'plain' ? '#mainPage' : '#mainPage;';
+        html = `<div id="status">Loading Modules</div><script>
+          document.cookie='fixtureAuth=1; path=/';
+          location.hash=${JSON.stringify(dashboard === 'transition' ? '#mainPage' : hash)};
+          setTimeout(()=>{location.hash=${JSON.stringify(hash)};document.querySelector('#status').textContent='Home Page Dashboard'},100);
+        </script>`;
+      } else {
+        html = `<input id="formfield-login"><button id="LoginView.fbtn_submit">Next</button><div id="status"></div><script>
+          const field=document.querySelector('input'), next=document.querySelector('button');
+          let ready=${!delayedStartup};
+          if (!ready) fetch('${app}startup').then(()=>{field.value='';ready=true});
+          next.onclick=()=>{
+            if (!ready || field.value!=='synthetic-user') {document.querySelector('#status').textContent='Please enter a username.';return}
+            location.href='${idp}/identify';
+          };
+        </script>`;
       }
     } else if (url.origin === origin) {
       actions.push(url.pathname);
@@ -56,7 +74,9 @@ async function withFixture({idp = origin, seed = secret} = {}, run) {
         html = widget('factor', '<input name="credentials.passcode" type="password">');
       }
       if (url.pathname === '/factor' && body.get('credentials.passcode') === 'synthetic-password') {
-        html = '<main id="okta-sign-in"><div data-se="google_otp"><a data-se="select-factor" href="/totp">Select</a></div></main>';
+        html = labelledFactors
+          ? '<main id="okta-sign-in"><a class="select-factor" data-se="button" aria-label="Select Email." href="/email">Select</a><a class="select-factor" data-se="button" aria-label="Select Google Authenticator." href="/totp">Select</a></main>'
+          : '<main id="okta-sign-in"><div data-se="google_otp"><a data-se="select-factor" href="/totp">Select</a></div></main>';
       }
       if (url.pathname === '/totp') html = widget('verify', '<input name="credentials.passcode">');
       if (url.pathname === '/verify' && [Date.now(), Date.now() - 30_000].some(time => totpCode(secret, time) === body.get('credentials.passcode'))) {
@@ -91,7 +111,7 @@ async function withFixture({idp = origin, seed = secret} = {}, run) {
   }};
 
   try {
-    await run({tenant, chromium: engine, envFile, timeoutMs: 1600}, actions);
+    await run({tenant, chromium: engine, envFile, timeoutMs: 5000}, actions);
   } finally {
     await browser.close();
     await rm(temp, {recursive: true, force: true});
@@ -125,5 +145,36 @@ test('invalid TOTP seed fails at the authenticator form without submitting it', 
   await withFixture({seed: 'invalid!'}, async (options, actions) => {
     await assert.rejects(openUiSession(options), {code: 'LOGIN_FAILED', stage: 'okta-totp'});
     assert.deepEqual(actions, ['/identify', '/password', '/factor', '/totp']);
+  });
+});
+
+
+for (const [name,variant] of [
+  ['delayed WellSky initialization', {delayedStartup:true}],
+  ['the labelled Google Authenticator link beside Email', {labelledFactors:true}],
+  ['a direct semicolon dashboard', {dashboard:'semicolon'}],
+  ['a dashboard that gains a semicolon while loading', {dashboard:'transition'}],
+]) {
+  test('Okta sign-in and session probe support '+name, {skip: !chromePath}, async () => {
+    await withFixture(variant, async (options, actions) => {
+      const session = await openUiSession(options);
+      try {
+        assert.equal(new URL(session.page.url()).hash, variant.dashboard ? '#mainPage;' : '#mainPage');
+        assert.equal(await probeAuthentication(session.context, app, options.timeoutMs), false);
+        assert.deepEqual(actions, ['/identify', '/password', '/factor', '/totp', '/verify']);
+      } finally { await session.close(); }
+    });
+  });
+}
+
+test('a dashboard-like fragment or loading screen cannot complete sign-in', {skip: !chromePath}, async () => {
+  await withFixture({}, async options => {
+    const session = await openUiSession(options);
+    try {
+      for (const [hash, text] of [['#mainPage;other','Home Page Dashboard'],['#mainPage;','Home Page Dashboard Loading Modules']]) {
+        await session.page.evaluate(([hash,text])=>{ location.hash=hash; document.body.textContent=text; }, [hash,text]);
+        await assert.rejects(waitForLogin(session.page,200),{name:'TimeoutError'});
+      }
+    } finally { await session.close(); }
   });
 });

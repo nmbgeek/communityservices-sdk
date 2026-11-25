@@ -12,7 +12,7 @@ let root,chrome;
 before(async()=>{root=await mkdtemp(join(tmpdir(),'wellsky-password-test-'));if(process.env.WELLSKY_TEST_CHROME){const {chromium}=await import('playwright-core');chrome=await chromium.launch({headless:true,executablePath:process.env.WELLSKY_TEST_CHROME});}});
 after(async()=>{await chrome?.close();await rm(root,{recursive:true,force:true});});
 const browserTest=(name,fn)=>test(name,{skip:!process.env.WELLSKY_TEST_CHROME},fn);
-async function fixture({expired=true,stage,activePassword,loseReset=false,loseRestore=false,badLabels=false,rejectRestore=false,failProbe=false,defaultStore=false}={}){
+async function fixture({expired=true,stage,activePassword,loseReset=false,loseRestore=false,badLabels=false,rejectRestore=false,failProbe=false,defaultStore=false,dashboardHash='mainPage'}={}){
  const envFile=join(root,Math.random()+'.env'),journalDir=envFile+'.journal',source=`HMIS_UI_USER=synthetic\nHMIS_UI_PASSWORD=${original}\nHMIS_UI_PASSWORD_RECOVERY_DIR=${journalDir}\n`;
  await writeFile(envFile,source);
  let records=stage?[{version:1,appendCharacter:'!',stage}]:[],locked=false,launches=0;
@@ -25,7 +25,7 @@ async function fixture({expired=true,stage,activePassword,loseReset=false,loseRe
  const store={async withLock(scope,work){assert.equal(scope,recoveryScope);if(locked)throw Error('Locked');locked=true;try{return await work();}finally{locked=false;}},async read(){assert.ok(locked);return structuredClone(records);},async write(scope,r){assert.ok(locked);records=structuredClone(r);history.push(records.at(-1).stage);}};
  const html=`<input id="formfield-login"><input type="password" id="formfield-password"><button id="LoginView.fbtn_submit">LOGIN</button><div id="status"></div><script>
  const byId=id=>document.getElementById(id);
- function dashboard(){document.cookie='syntheticAuth=1; path=/';location.hash='mainPage';document.body.innerHTML='<p>Community Services</p><p>Home Page Dashboard</p><button title="Edit User Profile for Synthetic">Profile</button>';document.querySelector('button').onclick=()=>{document.body.insertAdjacentHTML('beforeend','<button id="UserProfilePopup.changePassword-button">Change Password</button>');byId('UserProfilePopup.changePassword-button').onclick=()=>{const names=${JSON.stringify(badLabels?['Wrong label','New Password','Re-enter New Password']:['Current Password','New Password','Re-enter New Password'])};document.body.insertAdjacentHTML('beforeend','<div role="dialog">'+names.map((n,i)=>'<table><tr><td><table><tr><td id="label'+i+'">'+n+'</td></tr></table></td><td><input type="password" maxlength="50" aria-labelledby="label'+i+'"></td></tr></table>').join('')+'<button id="UserProfileChangePasswordPopup.save-button">Save</button></div>');byId('UserProfileChangePasswordPopup.save-button').onclick=async()=>{const values=[...document.querySelectorAll('[role=dialog] input')].map(e=>e.value);const result=await window.synthetic('restore',values);if(result==='saved')document.querySelector('[role=dialog]').remove();};};};}
+ function dashboard(){document.cookie='syntheticAuth=1; path=/';location.hash=${JSON.stringify(dashboardHash)};document.body.innerHTML='<p>Community Services</p><p>Home Page Dashboard</p><button title="Edit User Profile for Synthetic">Profile</button>';document.querySelector('button').onclick=()=>{document.body.insertAdjacentHTML('beforeend','<button id="UserProfilePopup.changePassword-button">Change Password</button>');byId('UserProfilePopup.changePassword-button').onclick=()=>{const names=${JSON.stringify(badLabels?['Wrong label','New Password','Re-enter New Password']:['Current Password','New Password','Re-enter New Password'])};document.body.insertAdjacentHTML('beforeend','<div role="dialog">'+names.map((n,i)=>'<table><tr><td><table><tr><td id="label'+i+'">'+n+'</td></tr></table></td><td><input type="password" maxlength="50" aria-labelledby="label'+i+'"></td></tr></table>').join('')+'<button id="UserProfileChangePasswordPopup.save-button">Save</button></div>');byId('UserProfileChangePasswordPopup.save-button').onclick=async()=>{const values=[...document.querySelectorAll('[role=dialog] input')].map(e=>e.value);const result=await window.synthetic('restore',values);if(result==='saved')document.querySelector('[role=dialog]').remove();};};};}
  function bindLogin(){byId('LoginView.fbtn_submit').onclick=async()=>{const reset=!!byId('formfield-password2');const result=await window.synthetic(reset?'reset':'login',reset?[byId('formfield-password2').value,byId('formfield-password').value]:[byId('formfield-password').value]);if(result==='dashboard')dashboard();else if(result==='expired'){byId('status').textContent='Password has expired!';byId('formfield-password').value='';byId('status').insertAdjacentHTML('beforebegin','<input type="password" id="formfield-password2">');}};}if(document.cookie.includes('syntheticAuth=1'))dashboard();else bindLogin();
  </script>`;
  const chromium={async launch(){launches++;return {async newContext(){const c=await chrome.newContext();contexts.push(c);await c.exposeBinding('synthetic',async(_,op,values)=>{
@@ -70,4 +70,15 @@ browserTest('normal 50-character passwords can log in but expiration stops befor
 });
 browserTest('stale visible dashboard uses a separate authentication probe after a failed operation',async()=>{
  const {withPageLock}=await import('../browser/page-lock.mjs');const f=await fixture({expired:false});try{const s=await openUiSession(f.options),page=s.page;await s.context.clearCookies();let calls=0;await assert.rejects(withPageLock(page,async()=>{calls++;throw Error('Server returned 500');}),e=>e.code==='SESSION_INTERRUPTED'&&e.reauthenticated);assert.equal(calls,1);assert.equal(s.page,page);assert.deepEqual(f.actions,['login','login']);await s.close();}finally{await f.close();}
+});
+
+browserTest('a semicolon dashboard confirms password recovery with one reset and restore',async()=>{
+ const f=await fixture({dashboardHash:'mainPage;'});
+ try{
+  const session=await openUiSession(f.options);
+  assert.equal(session.passwordRecovery,'restored-original');
+  assert.equal(new URL(session.page.url()).hash,'#mainPage;');
+  assert.deepEqual(f.actions,['login','reset','restore','login']);
+  await session.close();
+ }finally{await f.close();}
 });

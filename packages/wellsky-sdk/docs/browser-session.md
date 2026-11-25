@@ -90,10 +90,11 @@ Keep the browser account credentials in the selected `envFile`. Use
 `WELLSKY_OKTA_ORIGIN` and `WELLSKY_TOTP_SECRET` can also come from the Node
 process environment. Values in the selected file take precedence.
 
-The SDK enters the WellSky username, follows the redirect to the configured
-Okta origin, and completes the supported hosted widget password and
-authenticator-code prompts. It waits for the tenant's dashboard before giving
-the browser session to callers. Okta sign-in skips the legacy password
+The SDK waits for the WellSky username form, verifies the entered username, and
+submits it once. On the configured Okta origin it completes the password prompt
+and selects Google Authenticator when the hosted widget offers a choice of factors.
+Sign-in and session checks recognize both `#mainPage` and `#mainPage;` on the
+tenant dashboard. Okta sign-in skips the legacy password
 recovery workflow. Other MFA methods such as push and security keys require
 interactive sign-in.
 

@@ -1,9 +1,12 @@
 import {createHmac} from 'node:crypto';
+import {dashboardHashes} from './connection.mjs';
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const username = 'input[name="identifier"], input[name="username"]';
 const password = 'input[name="credentials.passcode"][type="password"], input[name="password"][type="password"]';
 const passcode = 'input[name="credentials.passcode"]:not([type="password"]), input[name="passCode"]';
+const passwordFactor = '[data-se="okta_password"] [data-se="select-factor"]';
+const googleFactor = '[data-se="google_otp"] [data-se="select-factor"], :is(a,button)[aria-label="Select Google Authenticator."]';
 const submit = 'button[type="submit"], input[type="submit"]';
 
 export function readOktaOrigin(value) {
@@ -43,6 +46,7 @@ export function totpCode(secret, time = Date.now()) {
 
 export async function completeOktaLogin({page, origin, target, tenant, user, secret, uiPassword, timeoutMs, setStage}) {
   const deadline = Date.now() + timeoutMs;
+  const remaining = () => Math.max(1, deadline - Date.now());
   const appPath = '/' + tenant + '/';
   let wellskyUsernameSubmitted = false;
   let oktaUsernameSubmitted = false;
@@ -53,25 +57,27 @@ export async function completeOktaLogin({page, origin, target, tenant, user, sec
 
   for (;;) {
     const state = await page.waitForFunction(settings => {
-      const visible = selector => [...document.querySelectorAll(selector)].some(element =>
+      const visible = (selector, root = document) => [...root.querySelectorAll(selector)].some(element =>
         element.getClientRects().length && getComputedStyle(element).visibility === 'visible');
       if (location.origin === settings.target && location.pathname.startsWith(settings.appPath)) {
-        if (location.hash === '#mainPage') return 'returned';
-        if (!settings.wellskyUsernameSubmitted && visible('[id="formfield-login"]')) return 'wellsky-username';
+        if (settings.dashboardHashes.includes(location.hash)) return 'returned';
+        if (!settings.wellskyUsernameSubmitted && visible('[id="formfield-login"]') && visible('[id="LoginView.fbtn_submit"]')) return 'wellsky-username';
         return false;
       }
       if (location.origin !== settings.origin) return 'unexpected-origin';
-      const inWidget = selector => visible(selector.split(', ').map(part => '#okta-sign-in ' + part).join(', '));
+      const widget = document.getElementById('okta-sign-in');
+      if (!widget) return false;
+      const inWidget = selector => visible(selector, widget);
       const title = document.querySelector('#okta-sign-in h2, #okta-sign-in h1')?.textContent ?? '';
       if (!settings.codeSubmitted && inWidget(settings.passcode)
         && (settings.factorSelected || /Google Authenticator|Okta Verify/i.test(title))) return 'okta-totp';
       if (!settings.passwordSubmitted && inWidget(settings.password)) return 'okta-password';
-      if (!settings.passwordSubmitted && !settings.passwordSelected && inWidget('[data-se="okta_password"] [data-se="select-factor"]')) return 'okta-select-password';
+      if (!settings.passwordSubmitted && !settings.passwordSelected && inWidget(settings.passwordFactor)) return 'okta-select-password';
       if (!settings.oktaUsernameSubmitted && inWidget(settings.username)) return 'okta-username';
-      if (!settings.codeSubmitted && !settings.factorSelected && inWidget('[data-se="google_otp"] [data-se="select-factor"]')) return 'okta-select-totp';
+      if (!settings.codeSubmitted && !settings.factorSelected && inWidget(settings.googleFactor)) return 'okta-select-totp';
       return false;
     }, {origin, target, appPath, wellskyUsernameSubmitted, oktaUsernameSubmitted, passwordSubmitted,
-      codeSubmitted, passwordSelected, factorSelected, username, password, passcode}, {timeout: Math.max(1, deadline - Date.now())});
+      codeSubmitted, passwordSelected, factorSelected, username, password, passcode, passwordFactor, googleFactor, dashboardHashes}, {timeout: remaining()});
     const step = await state.jsonValue();
     await state.dispose();
     setStage(step);
@@ -79,8 +85,16 @@ export async function completeOktaLogin({page, origin, target, tenant, user, sec
     const url = new URL(page.url());
     if (step === 'returned' && url.origin === target && url.pathname.startsWith(appPath)) return;
     if (step === 'wellsky-username' && url.origin === target && url.pathname.startsWith(appPath)) {
-      await page.locator('[id="formfield-login"]:visible').fill(user);
-      await page.locator('[id="LoginView.fbtn_submit"]:visible').click();
+      // WellSky can redraw a visible form when its startup requests finish.
+      await page.waitForLoadState('networkidle', {timeout: remaining()});
+      const button = page.locator('[id="LoginView.fbtn_submit"]:visible');
+      const field = page.locator('[id="formfield-login"]:visible');
+      await button.click({trial: true, timeout: remaining()});
+      const current = new URL(page.url());
+      if (current.origin !== target || !current.pathname.startsWith(appPath)) continue;
+      await field.fill(user, {timeout: remaining()});
+      if (await field.inputValue({timeout: remaining()}) !== user) throw Error('WellSky username changed before submit');
+      await button.click({timeout: remaining()});
       wellskyUsernameSubmitted = true;
       continue;
     }
@@ -88,8 +102,8 @@ export async function completeOktaLogin({page, origin, target, tenant, user, sec
 
     const widget = page.locator('#okta-sign-in');
     if (step === 'okta-select-password' || step === 'okta-select-totp') {
-      const factor = step === 'okta-select-password' ? 'okta_password' : 'google_otp';
-      await widget.locator(`[data-se="${factor}"] [data-se="select-factor"]:visible`).click();
+      const selector = step === 'okta-select-password' ? passwordFactor : googleFactor;
+      await widget.locator(selector).filter({visible: true}).click();
       if (step === 'okta-select-password') passwordSelected = true;
       else factorSelected = true;
       continue;

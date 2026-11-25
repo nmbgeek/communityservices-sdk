@@ -1,11 +1,13 @@
+import {dashboardHashes} from './connection.mjs';
+
 // Internal UI steps. The login orchestrator owns the account lock and write journal.
 export async function waitForLogin(page,timeoutMs){
- await page.waitForFunction(()=>{
+ await page.waitForFunction(hashes=>{
   const visible=e=>e&&e.getBoundingClientRect().width>0;
   const expired=document.body.innerText.includes('Password has expired!')&&visible(document.getElementById('formfield-password2'))&&visible(document.getElementById('formfield-password'));
-  const dashboard=location.hash==='#mainPage'&&!visible(document.getElementById('formfield-password'))&&document.body.innerText.includes('Home Page Dashboard')&&!document.body.innerText.includes('Processing...')&&!document.body.innerText.includes('Loading Modules');
+  const dashboard=hashes.includes(location.hash)&&!visible(document.getElementById('formfield-password'))&&document.body.innerText.includes('Home Page Dashboard')&&!document.body.innerText.includes('Processing...')&&!document.body.innerText.includes('Loading Modules');
   return expired||dashboard;
- },null,{timeout:timeoutMs});
+ },dashboardHashes,{timeout:timeoutMs});
  return await page.locator('[id="formfield-password2"]').isVisible()?'expired':'dashboard';
 }
 export async function submitExpiredPassword(page,password,beforeSubmit,timeoutMs){
@@ -15,7 +17,7 @@ export async function submitExpiredPassword(page,password,beforeSubmit,timeoutMs
  await beforeSubmit();
  await page.locator('[id="LoginView.fbtn_submit"]').click();
  // Waiting for a dashboard prevents interpreting the unchanged reset form as success.
- await page.waitForFunction(()=>location.hash==='#mainPage'&&!document.body.innerText.includes('Password has expired!'),null,{timeout:timeoutMs});
+ await page.waitForFunction(hashes=>hashes.includes(location.hash)&&!document.body.innerText.includes('Password has expired!'),dashboardHashes,{timeout:timeoutMs});
  if(await waitForLogin(page,timeoutMs)!=='dashboard')throw Error('Temporary password was not confirmed');
 }
 export async function restoreOriginalPassword(page,temporaryPassword,originalPassword,beforeSubmit,timeoutMs){
@@ -40,10 +42,10 @@ export async function probeAuthentication(context,moduleUrl,timeoutMs){
  const page=await context.newPage();
  try{
   await page.goto(moduleUrl+'index.html',{waitUntil:'domcontentloaded',timeout:timeoutMs});
-  await page.waitForFunction(()=>{
+  await page.waitForFunction(hashes=>{
    return ['formfield-login','formfield-password'].some(id=>document.getElementById(id)?.getBoundingClientRect().width>0)
-    ||location.hash==='#mainPage'&&document.body.innerText.includes('Home Page Dashboard');
-  },null,{timeout:timeoutMs});
+    ||hashes.includes(location.hash)&&document.body.innerText.includes('Home Page Dashboard');
+  },dashboardHashes,{timeout:timeoutMs});
   return await page.locator('[id="formfield-login"]:visible, [id="formfield-password"]:visible').count()>0;
  }finally{await page.close();}
 }
