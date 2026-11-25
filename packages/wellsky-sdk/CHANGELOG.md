@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.0 - 2026-11-25
+
+- Add optional durable assessment discovery for enrollment and household workflows. Workers can share configured forms and write labels across clients and select a captured revision for backdated enrollments.
+- Return refreshed discovery when a plan's form changes. Attempted writes retain their original journal for reconciliation. Implements #13.
+
 ## 0.13.0 - 2026-11-24
 
 - Support WellSky’s username-first Okta sign-in with TOTP. Configure `WELLSKY_OKTA_ORIGIN` to enable Okta and reuse the authenticated browser session for related operations.
