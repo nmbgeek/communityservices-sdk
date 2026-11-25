@@ -15,7 +15,7 @@
 - [Assessments](docs/assessments.md): questions, picklists, encoding, verification records.
 - [Dates](docs/dates-and-answers.md): DOB, effective timestamps, intervals.
 - [Browser sessions](docs/browser-session.md): login, password recovery, GWT adapters.
-- [Enrollments](docs/enrollments.md): entry, household members, interim, exit.
+- [Enrollments](docs/enrollments.md): entry, household members, interim, exit, and reopening enrollments by deleting an exit.
 - [Durable records](docs/durable-records.md): client source identity, household membership, case plans, source-key notes, structured recovery.
 - [Examples](examples/README.md): shipped files and installed-package test coverage.
 - [Profiles](docs/profiles.md): Client Record, Sex, DOB.

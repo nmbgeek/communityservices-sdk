@@ -459,6 +459,20 @@ For a 0.9.1 non-HUD/VA addition that attached the member and then failed the typ
 
 For street outreach and night-by-night shelter meaningful contacts, use the [Current Living Situation recorder](current-living-situation.md). Start always comes from program entry, information date comes from the contact, and end may be empty. Generic `subassessments` plans do not infer these event rules and can adopt an existing semantically matching row. They are not a distinct-contact recorder. Do not use the income replacement example to close or replace CLS contact history.
 
+## Delete an exit and reopen enrollments
+
+Use `createExitDeletion` with `createExitDeletionUi` from `@choiceapps/communityservices-sdk/browser`. The helper uses the trash icon in **Edit Exit Data** because the V2 and V3 REST contracts have no exit removal operation.
+
+1. Supply an authenticated Playwright page and a durable mutation store.
+2. Call `deleteExit` with the authorized `clientId`, `enrollmentId`, `providerId`, and a stable source `key`. Authorize the whole linked exit before calling. WellSky applies the confirmation to every active enrollment in that exit subgroup.
+3. Read `reopenedEnrollmentIds` from the result. Each returned enrollment stays active and has its exit data cleared. Members whose exits belong to a different subgroup keep their exits.
+
+A verified confirmation returns `deleted`. If a fresh read verifies an uncertain confirmation, the helper returns `reconciled`. A replay of a verified operation returns `already-deleted` after a fresh read. A target that was already open returns `already-open` with an empty list.
+
+If the operation fails after confirmation may have started, retry with the same input and journal. The helper records the attempt before clicking **Yes** and checks fresh enrollment state on retry. An unresolved attempt blocks another confirmation for overlapping enrollments. `ExitDeletionError` reports a workflow conflict through its `reason` property.
+
+See the [reopen enrollment example](../examples/exit-deletion.mts) and [browser declarations](../browser/exit-deletion.d.mts).
+
 ## Delete an Entry / Exit
 
 Use `createEnrollmentDeletion` with `createEnrollmentDeletionUi` to delete one explicitly selected Entry / Exit record. WellSky calls this deleting in the UI; it marks the record inactive and hides it. This is separate from recording an exit date.

@@ -26,6 +26,7 @@ export {entryExitTypes} from './entry-exit-types.mjs';
 export {createMemberEntryDatePort,MemberEntryDateInputError} from './member-entry-date.mjs';
 export {createHouseholdExitUi} from './household-exit.mjs';
 export {createEnrollmentDeletion,createEnrollmentDeletionUi,EnrollmentDeletionError} from './enrollment-deletion.mjs';
+export {createExitDeletion, createExitDeletionUi, ExitDeletionError} from './exit-deletion.mjs';
 
 export {SessionInterruptedError} from './session-authentication.mjs';
 export {createClientProfile} from './client-profile.mjs';

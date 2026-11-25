@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.0 - 2026-11-25
+
+- Add the browser SDK's `deleteExit` operation. It inactivates the selected exit, verifies that every linked enrollment reopened, and reconciles uncertain confirmations through the same journal.
+
 ## 0.14.4 - 2026-11-25
 
 - Add opt-in, value-free diagnostics to Client Record updates. Events describe each call’s REST and UI writes, verification results, and first observed failure across same-key retries. Implements #17.

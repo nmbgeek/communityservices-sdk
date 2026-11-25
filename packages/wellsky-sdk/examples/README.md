@@ -49,6 +49,7 @@ Installed checks also run the client-creation, attachment-retry, session-authent
 
 [current-living-situation.mts](current-living-situation.mts) records application-supplied outreach or night-by-night shelter contact events with distinct durable keys and optional recording-program picklist selections. It compiles and imports against the installed package without opening a live session.
 
+- [Exit deletion](exit-deletion.mts) reopens the active enrollments linked to the selected exit.
 - [Entry / Exit deletion](enrollment-deletion.mts): delete an authorized record through its numbered UI confirmation with a durable journal.
 
 - [Race and Ethnicity](race-ethnicity.mts): standard writes, raw UI-text verification, and explicit current-answer repair.

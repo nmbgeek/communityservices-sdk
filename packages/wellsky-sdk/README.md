@@ -52,6 +52,7 @@ The root export uses V3; use `/v2` or `/v3` to choose explicitly. Responses pres
 | Client creation, households, notes, goals, and actions | [Durable records](docs/durable-records.md) |
 | Program metadata, questions, and picklist answers | [Assessments](docs/assessments.md) |
 | Enrollment, interim reviews, household changes, and exits | [Enrollments](docs/enrollments.md) |
+| Reopen enrollments by inactivating an exit | [Exit deletion](docs/enrollments.md#delete-an-exit-and-reopen-enrollments) |
 | Profile fields and date of birth | [Profiles](docs/profiles.md) |
 | Services, SSVF details, and Funding Sources | [Services](docs/services.md), [SSVF rules](SSVF.md) |
 | Needs without service delivery | [Independent needs](docs/independent-needs.md) |
