@@ -139,7 +139,11 @@ export interface EnrollmentWorkflowResult {
   /** Fresh client API and UI verification of the member's calendar DOB. */
   birthDate?:{clientId:number;dateOfBirth:string;effectiveDate:string};
 }
-export interface InterimWorkflowResult extends EnrollmentWorkflowResult {reviewId:number;}
+export interface InterimWorkflowResult extends EnrollmentWorkflowResult {
+  reviewId:number;
+  /** The SDK verified this review against a legacy entry journal and the pinned configured forms. */
+  legacyEntrySchemaVerified?:true;
+}
 export interface ExitWorkflowResult extends EnrollmentWorkflowResult {projectExitDate:string;exitSubgroupId:string;}
 /** An individual exit may have no linked exit subgroup. */
 export interface ExitEnrollmentResult extends EnrollmentWorkflowResult {projectExitDate:string;exitSubgroupId:string|null;}

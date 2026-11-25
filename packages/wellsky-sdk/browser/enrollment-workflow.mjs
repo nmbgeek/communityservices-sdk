@@ -265,11 +265,27 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(expectedRevision!==undefined && expectedRevision!==discovered.schemaRevision)changed(currentForms);
    const schemaHash=journalSchema(discovered);
    if(record&&record.schemaHash!==schemaHash)fail('program assessment configuration changed');
+   let legacyEntrySchemaHash=record?.legacyEntrySchemaHash;
+   if(legacyEntrySchemaHash!==undefined && legacyEntrySchemaHash!==entry?.schemaHash)fail('program assessment configuration changed');
    if(entry&&entry.schemaHash!==schemaHash){
-    // A later, explicitly dated standards revision can apply to a new review or exit.
-    if(!entry.formSnapshot || !discovered.formRevision || discovered.formRevision===entry.formSnapshot.formRevision ||
-       journalSchema(entry.formSnapshot)!==entry.schemaHash)fail('program assessment configuration changed');
-    if(input.assessment.schemaRevision!==discovered.schemaRevision)changed(discovered);
+    if(entry.formSnapshot){
+     // A later, explicitly dated standards revision can apply to a new review or exit.
+     if(!discovered.formRevision || discovered.formRevision===entry.formSnapshot.formRevision ||
+        journalSchema(entry.formSnapshot)!==entry.schemaHash)fail('program assessment configuration changed');
+     if(input.assessment.schemaRevision!==discovered.schemaRevision)changed(discovered);
+    }else if(!legacyEntrySchemaHash){
+     if(kind!=='interim'||record||!formCache||!discovered.schemaRevision||input.assessment.schemaRevision!==discovered.schemaRevision ||
+        entry.context.clientId!==input.clientId||entry.assessmentCode!==discovered.entry.assessment.code)fail('program assessment configuration changed');
+     const evidence=await formCache.reconstructLegacyEntry(entry,discovered);
+     if(evidence?.refresh){
+      // Refresh both defaults and definitions once. Only the caller can rebuild its plan.
+      refreshOnDrift=undefined;
+      const refreshed=await discover(discoveryInput,false,{refreshPhase:'all'});
+      if(refreshed.schemaRevision!==discovered.schemaRevision)changed(refreshed);
+     }
+     if(!evidence?.legacy||journalSchema(evidence.legacy)!==entry.schemaHash)fail('program assessment configuration changed');
+     legacyEntrySchemaHash=entry.schemaHash;
+    }
    }
    const definition=discovered[kind].definition,code=definition.assessmentCode,at=kind==='entry'?input.entryDate:(input.exitDate??input.reviewDate);
    const exitSchemaHash=kind==='exit'?hash({assessment:discovered.exit.assessment,questions:definition.questions}):undefined;
@@ -381,7 +397,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    if(internal.preflight)requireCurrent();
    if(internal.preflight)return {assessmentCode:code,...(discovered.schemaRevision?{schemaRevision:discovered.schemaRevision}:{}),...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
    const wasVerified=record?.stage==='verified';
-   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(currentForms.schemaRevision?{formSnapshot:currentForms}:{}),...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
+   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(legacyEntrySchemaHash?{legacyEntrySchemaHash}:{}),...(currentForms.schemaRevision?{formSnapshot:currentForms}:{}),...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const step=async(name,inspect,submit)=>{
     let result=await inspect();const previous=record.steps[name];
@@ -496,7 +512,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     record.steps.birthDate={state:'verified',value:{clientId:input.clientId,dateOfBirth:result.dateOfBirth,effectiveDate:result.effectiveDate}};await persist();
    }
    record.stage='verified';await persist();
-   return {key:input.key,outcome:wasVerified?'already-present':'verified',clientId:input.clientId,enrollmentId:record.enrollmentId,...(record.reviewId?{reviewId:record.reviewId}:{}),...(record.projectExitDate?{projectExitDate:record.projectExitDate,exitSubgroupId:record.exitSubgroupId}:{}),assessmentCode:code,recordsetIds:structuredClone(record.rows),effectiveDate:at,...(record.steps.birthDate?{birthDate:structuredClone(record.steps.birthDate.value)}:{})};
+   return {key:input.key,outcome:wasVerified?'already-present':'verified',...(record.legacyEntrySchemaHash?{legacyEntrySchemaVerified:true}:{}),clientId:input.clientId,enrollmentId:record.enrollmentId,...(record.reviewId?{reviewId:record.reviewId}:{}),...(record.projectExitDate?{projectExitDate:record.projectExitDate,exitSubgroupId:record.exitSubgroupId}:{}),assessmentCode:code,recordsetIds:structuredClone(record.rows),effectiveDate:at,...(record.steps.birthDate?{birthDate:structuredClone(record.steps.birthDate.value)}:{})};
   }).catch(async error=>{
    if(refreshOnDrift)await refreshOnDrift(error);
    throw error;

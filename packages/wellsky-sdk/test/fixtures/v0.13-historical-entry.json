@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "key": "cache-entry",
+  "kind": "entry",
+  "intentHash": "d8ed6291ae8492e1b86a857028dd3cbb82b6bf65be168e9a4c12161a64cab387",
+  "schemaHash": "575cdd67415c47066ca34f7d0c3c9407cea9386270c497026b6147f858164ab8",
+  "context": {
+    "clientId": 1,
+    "providerId": 2,
+    "type": "HUD",
+    "entryDate": "2026-10-19T16:00:00.000Z"
+  },
+  "assessmentCode": "ENTRY",
+  "stage": "verified",
+  "steps": {
+    "enrollment": {
+      "state": "verified",
+      "value": 50
+    }
+  },
+  "rows": {},
+  "ends": [],
+  "enrollmentId": 50
+}

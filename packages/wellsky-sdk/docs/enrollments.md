@@ -130,6 +130,14 @@ Add a revision at rollout and retain the old one for backdated work. Capture the
 
 Pin each member's plan using its discovery's `schemaRevision`. A recognized schema error triggers one read-only refresh of the affected phase and its provider defaults. On `FORM_REVISION_CHANGED`, use `error.discovery` to rebuild a plan if the operation has not started. After a possible write, resume with the original key and intent. The workflow uses the original journal for reconciliation and blocks new submissions against a changed form.
 
+#### Interim Reviews for entries created before durable discovery
+
+A verified 0.13 entry can include historical subassessment fields in its journal hash. To start a new Interim Review, call `discover` for the review date and pass its `schemaRevision` on the assessment plan. If the entry hash differs, the SDK checks that both dates fall in the same currently active revision declared by the application. It checks live provider defaults, reads both forms in the enrolled client's context at the entry date, and rebuilds both the configured definition and the legacy definition from those responses. The original hash must match, and every configured field must retain its properties. The SDK also checks automatic write labels against the pinned review. A successful review receipt includes `legacyEntrySchemaVerified: true` when this check was needed.
+
+If the SDK finds stale configured metadata, it refreshes the provider's forms once. `FORM_REVISION_CHANGED` carries the refreshed `error.discovery`. When `error.committed === false`, show the change to the caller, rebuild the plan, and pin the new revision. If the original hash cannot be reproduced, or the rollout dates rule out a match, the SDK refuses the review with no new write. After a possible write, resume with the original key and plan.
+
+Keep the rollout dates accurate. The 0.13 hash cannot distinguish a historical-only child from a formerly configured child that still appears in a saved answer. An unrecorded removal can therefore look like an unchanged form. Historical questions stay out of the shared store, and the SDK preserves the verified entry journal.
+
 ### Yes/no answers
 
 Mobile answer writes store yes/no values empty (see [yes/no acceptance](assessments.md#yesno-answer-acceptance)). With the default `yesNoWrites: 'mobile'`, a plan that answers a yes/no question leaves its `scalars` stage pending. To save those answers, construct the workflow with the standard endpoint:

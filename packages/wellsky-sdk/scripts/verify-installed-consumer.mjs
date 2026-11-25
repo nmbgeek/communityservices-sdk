@@ -25,6 +25,7 @@ export async function verifyInstalledConsumer(temporary,expectedVersion){
   // hooks for fault injection, without source fallbacks or import rewriting.
   const regressionFiles=['race-workflow.test.mjs','race-ethnicity.test.mjs','mobile-preflight.test.mjs','enrollment-deletion.test.mjs','tenant-connections.test.mjs','attachment-retry.test.mjs','client-creation.test.mjs','session-authentication.test.mjs','needs.test.mjs','gwt-mapped.test.mjs','shelters.test.mjs','shelter-inventory.test.mjs','current-living-situation.test.mjs','coordinated-entry-event.test.mjs','enrollment-workflow.test.mjs','household-enrollment-workflow.test.mjs','date-of-birth.test.mjs','review-regressions.test.mjs'];
   cpSync(join('test','race-fixture.mjs'),join(temporary,'race-fixture.mjs'));
+  cpSync('test/fixtures/v0.13-historical-entry.json',join(temporary,'fixtures','v0.13-historical-entry.json'));
   for(const file of regressionFiles)cpSync(join('test',file),join(temporary,file));
   execFileSync(process.execPath,['--test','--test-concurrency=2',...regressionFiles.map(file=>join(temporary,file))],{cwd:temporary,stdio:'inherit'});
   writeFileSync(join(temporary, 'smoke.mjs'), `

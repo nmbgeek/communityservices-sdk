@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1 - 2026-11-25
+
+- Allow a pinned Interim Review for a verified legacy enrollment when its original journal hash can be reproduced and only historical answer fields explain the difference within the declared form revision. A stale plan receives refreshed discovery before submission. Fixes #14.
+
 ## 0.14.0 - 2026-11-25
 
 - Add optional durable assessment discovery for enrollment and household workflows. Workers can share configured forms and write labels across clients and select a captured revision for backdated enrollments.

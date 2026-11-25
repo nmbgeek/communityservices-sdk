@@ -37,12 +37,16 @@ export function createFormMetadataCache({config, api, discovery, enrollmentSessi
     }
     return selected;
   }
-  async function readForm(input, assessment, effectiveDate) {
+  async function readSources(input, assessment, effectiveDate) {
     const path = {clientId:input.clientId, assessmentCode:assessment.code};
     const [mobile, generic] = await Promise.all([api.assessmentsMobile.getAnswers({path}), api.assessments.get({path,query:{dateEffective:effectiveDate}})]);
-    const definition = buildAssessmentDefinition({tenant:api.tenant, assessmentCode:assessment.code, effectiveDate, mobile, generic, configuredOnly:true});
+    return {tenant:api.tenant, assessmentCode:assessment.code, effectiveDate, mobile, generic};
+  }
+  async function readForm(input, assessment, effectiveDate) {
+    const sources = await readSources(input, assessment, effectiveDate);
+    const definition = buildAssessmentDefinition({...sources, configuredOnly:true});
     if (definition.unresolvedPicklists.length) fail('assessment metadata incomplete');
-    return {assessment,definition,genericSchema:genericFormHash(generic,hash)};
+    return {assessment,definition,genericSchema:genericFormHash(sources.generic,hash)};
   }
   async function readLabels(clientId, forms) {
     const ids = new Set();
@@ -72,7 +76,7 @@ export function createFormMetadataCache({config, api, discovery, enrollmentSessi
         const formKey = assessment => JSON.stringify([assessment.assessmentId,assessment.code]);
         const refreshedKey = selected[refreshPhase] && formKey(selected[refreshPhase]);
         for (const phase of Object.keys(forms)) {
-          if (formKey(forms[phase].assessment) === refreshedKey || hash(forms[phase].assessment) !== hash(selected[phase] ?? null)) delete forms[phase];
+          if (refreshPhase === 'all' || formKey(forms[phase].assessment) === refreshedKey || hash(forms[phase].assessment) !== hash(selected[phase] ?? null)) delete forms[phase];
         }
         const fetched = [];
         const byForm = new Map(Object.values(forms).map(form => [formKey(form.assessment),form]));
@@ -114,11 +118,44 @@ export function createFormMetadataCache({config, api, discovery, enrollmentSessi
       return structuredClone(result);
     });
   }
+  // Derive both projections from the same source reads. The historical questions
+  // exist only in this check and must never enter the shared metadata store.
+  async function reconstructLegacyEntry(entry, review) {
+    const {period, locations, at} = select(entry.context);
+    if (period.id !== review.formRevision || period !== periods.findLast(item => item.start <= new Date().toISOString())) return;
+    const selected = await defaults(entry.context.providerId, locations);
+    const legacy = {provider:review.provider};
+    for (const phase of ['entry','interim']) {
+      const assessment = selected[phase];
+      if (!assessment || hash(assessment) !== hash(review[phase].assessment)) return {refresh:true};
+      const sources = await readSources(entry.context, assessment, at);
+      const configured = buildAssessmentDefinition({...sources,configuredOnly:true});
+      if (hash(configured.questions) !== hash(review[phase].definition.questions)) return {refresh:true};
+      const definition = buildAssessmentDefinition(sources);
+      if (definition.unresolvedPicklists.length || !retainsConfiguredFields(configured, definition, hash)) return;
+      legacy[phase] = {assessment,definition};
+    }
+    if (automaticLabels) {
+      const labels = await readLabels(entry.context.clientId,[review.entry,review.interim]);
+      if (hash(labels.sort((a,b) => a.optionId-b.optionId)) !== hash(review.writeLabels?.values ?? [])) return {refresh:true};
+    }
+    return {legacy};
+  }
   async function invalidate(input) {
     const {scope} = select(input);
     await store.withLock(scope, () => store.write(scope,[]));
   }
-  return {resolve,invalidate};
+  return {resolve,invalidate,reconstructLegacyEntry};
+}
+
+// Historical answer rows can also overwrite metadata on a configured question.
+// Accept only extra children, keeping each configured question's identity and properties.
+function retainsConfiguredFields(configured, legacy, hash) {
+  const byPath = new Map(flattenQuestions(legacy.questions).map(({path,question}) => [JSON.stringify(path),question]));
+  return flattenQuestions(configured.questions).every(({path,question}) => {
+    const historical = byPath.get(JSON.stringify(path));
+    return historical && hash({...historical,children:[]}) === hash({...question,children:[]});
+  });
 }
 
 export function isFormDrift(error) {

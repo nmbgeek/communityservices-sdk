@@ -1022,3 +1022,119 @@ test('metadata scopes isolate tenants, deployments, provider IDs and entry/exit 
  await f.worker().discover(f.context);
  assert.equal(f.calls.catalog,5);
 });
+
+async function legacyReviewFixture(){
+ const f=cachedWorkflowFixture();
+ // Produced by v0.13.0 createEnrollment using the historical CHOICE/ROWS fixture.
+ const entry=JSON.parse(await readFile(new URL('./fixtures/v0.13-historical-entry.json',import.meta.url),'utf8'));
+ const scope=JSON.stringify([f.api.tenant,'enrollment-workflow',entry.context.clientId]);
+ f.journal.set(scope,[structuredClone(entry)]);
+ f.entries.push({enrollmentId:entry.enrollmentId,clientId:entry.context.clientId,enrollmentProvider:entry.context.providerId,type:entry.context.type,projectStartDate:entry.context.entryDate,isActive:true});
+ const worker=f.worker(),forms=await worker.discover({...f.context,entryDate:reviewDate});
+ const review={key:'new-review',clientId:1,enrollmentKey:entry.key,reviewDate,assessment:{...f.input().assessment,schemaRevision:forms.schemaRevision}};
+ return {...f,entry,scope,forms,review};
+}
+
+test('legacy review refuses a missing plan pin, changed fields, or an unreconstructable entry',async()=>{
+ for(const change of ['unpinned','configured question','missing history','journal hash','default','write label']){
+  const f=await legacyReviewFixture();
+  switch(change){
+   case 'unpinned': delete f.review.assessment.schemaRevision;break;
+   case 'configured question': f.state.mandatory=true;break;
+   case 'missing history': {
+    for(const [service,name] of [[f.api.assessments,'get'],[f.api.assessmentsMobile,'getAnswers']]){
+     const read=service[name];
+     service[name]=async input=>{const rows=await read(input);rows[1].sub_assessment_answer_list=[];return rows;};
+    }
+    break;
+   }
+   case 'journal hash': f.journal.get(f.scope)[0].schemaHash='invalid';break;
+   case 'default': {
+    const read=f.discovery.getProviderAssessments;
+    f.discovery.getProviderAssessments=async input=>{const catalog=await read(input);catalog.defaults[0].assessment.assessmentId++;return catalog;};
+    break;
+   }
+   case 'write label': f.state.label='Changed label';break;
+  }
+  const stale=['configured question','default','write label'].includes(change);
+  const reads=f.calls.mobile;
+  await assert.rejects(f.worker().createInterim(f.review),e=>{
+   assert.equal(e.committed,false);
+   if(stale){
+    assert.equal(e.code,'FORM_REVISION_CHANGED');
+    assert.notEqual(e.discovery.schemaRevision,f.review.assessment.schemaRevision);
+    if(change==='write label')assert.equal(e.discovery.writeLabels.values[0].name,'Changed label');
+    if(change==='default')assert.equal(e.discovery.entry.assessment.assessmentId,2);
+    if(change==='configured question')assert.equal(e.discovery.entry.definition.questions[0].mandatory,true);
+   }else assert.equal(e.code,'PROGRAM_ASSESSMENT_CONFIGURATION_CHANGED');
+   return true;
+  },change);
+  if(stale){
+   const afterRefresh=f.calls.mobile;
+   assert.ok(afterRefresh>reads);
+   await f.worker().discover({...f.context,entryDate:reviewDate});
+   assert.equal(f.calls.mobile,afterRefresh);
+  }
+  assert.equal(f.counts.review,0,change);
+  assert.equal(f.journal.get(f.scope).length,1,change);
+ }
+});
+
+test('a pinned interim on a verified 0.13 journal survives a lost review response without rewriting the entry',async()=>{
+ const f=await legacyReviewFixture(), prior=f.helpers.createInterimUpdate;
+ f.helpers.createInterimUpdate=async input=>{
+  await prior(input);
+  throw Error('lost review response after commit');
+ };
+ await assert.rejects(f.worker().createInterim(f.review),e=>e.committed==='unknown');
+ assert.equal(f.counts.review,1);
+ assert.deepEqual(f.journal.get(f.scope)[0],f.entry);
+ f.helpers.createInterimUpdate=prior;
+ f.discovery.getProviderAssessments=async()=>{throw Error('recovery must use the pinned review');};
+ const result=await f.worker().createInterim(f.review);
+ assert.equal(result.reviewId,60);
+ assert.equal(result.legacyEntrySchemaVerified,true);
+ assert.equal(f.counts.review,1);
+ assert.deepEqual(f.journal.get(f.scope)[0],f.entry);
+ assert.doesNotMatch(JSON.stringify([...f.journal.values()]),/HISTORY_1|private answer/);
+});
+
+test('a legacy caller can rebuild from refreshed labels while a changed journaled question still blocks submission',async()=>{
+ for(const change of ['label','question']){
+  const f=await legacyReviewFixture(),worker=f.worker();
+  if(change==='label')f.state.label='New exact write label';
+  else f.state.mandatory=true;
+  let updated;
+  await assert.rejects(worker.createInterim(f.review),error=>{
+   updated=error.discovery;
+   return error.code==='FORM_REVISION_CHANGED' && error.committed===false && updated?.schemaRevision!==f.review.assessment.schemaRevision;
+  });
+  assert.equal(f.counts.review,0);
+  const rebuilt={...f.review,assessment:{...f.input().assessment,schemaRevision:updated.schemaRevision}};
+  if(change==='label'){
+   assert.equal(updated.writeLabels.values[0].name,f.state.label);
+   assert.equal((await worker.createInterim(rebuilt)).legacyEntrySchemaVerified,true);
+   assert.equal(f.counts.review,1);
+  }else{
+   await assert.rejects(worker.createInterim(rebuilt),e=>e.code==='PROGRAM_ASSESSMENT_CONFIGURATION_CHANGED'&&e.committed===false);
+   assert.equal(f.counts.review,0);
+  }
+  assert.deepEqual(f.journal.get(f.scope)[0],f.entry);
+ }
+});
+
+test('the legacy history check requires matching rollout dates and leaves cached forms usable on timeout',async()=>{
+ const f=await legacyReviewFixture(),worker=f.worker();
+ const catalogReads=f.calls.catalog;
+ f.state.failReads=true;
+ await assert.rejects(worker.createInterim(f.review),e=>e.committed===false && /timeout/.test(e.message));
+ f.state.failReads=false;
+ const forms=await worker.discover({...f.context,entryDate:reviewDate});
+ assert.equal(forms.schemaRevision,f.review.assessment.schemaRevision);
+ assert.equal(f.calls.catalog,catalogReads+1);
+ f.metadataCache.revisions.push({id:'new-revision',effectiveFrom:'2026-10-21T00:00:00Z'});
+ const afterRollout=f.worker();
+ f.review.assessment.schemaRevision=(await afterRollout.discover({...f.context,entryDate:reviewDate})).schemaRevision;
+ await assert.rejects(afterRollout.createInterim(f.review),e=>e.code==='PROGRAM_ASSESSMENT_CONFIGURATION_CHANGED'&&e.committed===false);
+ assert.equal(f.counts.review,0);
+});
