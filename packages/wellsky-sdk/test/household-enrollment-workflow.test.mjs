@@ -589,8 +589,8 @@ for(const type of uiEntryExitTypes)test(`${type}: an attempted uncertain member-
  assert.equal(f.additionCounts.date,1);assert.equal(f.entries.filter(e=>e.clientId===3).length,1);
 });
 
-test('household member preflight and execution share configured forms while keeping member answers separate',async()=>{
- const f=fixture(), counts={catalog:0,mobile:0}, original=f.discovery.getProviderAssessments;
+function cachedHouseholdWorker(f){
+ const counts={catalog:0,mobile:0}, original=f.discovery.getProviderAssessments;
  f.discovery.getProviderAssessments=async input=>{counts.catalog++;return original(input);};
  const raw=metadata.map(function convert(q){
   return {question_id:q.questionId,virt_field_name:q.fieldName,question_type:q.questionType,sub_assessment_question_list:q.children.map(convert)};
@@ -602,8 +602,80 @@ test('household member preflight and execution share configured forms while keep
   return rows.map((row,i)=>({...raw[i],...row}));
  };
  const worker=createEnrollmentWorkflow({...f,metadataCache:{store:f.store,revisions:[{id:'v1',effectiveFrom:'2020-01-01T00:00:00Z'}]}});
+ return {worker,counts};
+}
+
+test('household member preflight and execution share configured forms while keeping member answers separate',async()=>{
+ const f=fixture(),{worker,counts}=cachedHouseholdWorker(f);
  const result=await worker.createHouseholdEnrollment(entryInput());
  assert.deepEqual(counts,{catalog:1,mobile:2});
  assert.deepEqual(result.members.map(m=>m.clientId),[1,2]);
  assert.equal(new Set(result.members.flatMap(m=>Object.values(m.recordsetIds))).size,4);
+});
+
+test('household status reports the original mode and entry instant before the first member receipt',async()=>{
+ for(const durable of [false,true]){
+  const f=fixture(),{worker}=cachedHouseholdWorker(f);
+  const writer=durable?worker:f.workflow(),reader=durable?f.workflow():worker;
+  const write=f.store.write;
+  let stopped=false;
+  f.store.write=async(scope,records)=>{
+   await write(scope,records);
+   if(!stopped && records.some(r=>r.key==='entry'&&r.stage==='pending')){
+    stopped=true;throw Error('worker interrupted after household preflight');
+   }
+  };
+  await assert.rejects(writer.createHouseholdEnrollment(entryInput()),/worker interrupted/);
+  const get=()=>reader.getHouseholdStatus({headClientId:1,key:'entry'});
+  const pending=await get();
+  assert.equal(pending.stage,'pending');
+  assert.ok(pending.members.every(m=>m.enrollmentId===undefined));
+  assert.equal(pending.entryDate,new Date(entryDate).toISOString());
+  assert.equal(Object.hasOwn(pending,'durableDiscovery'),durable);
+  if(durable)assert.equal(pending.durableDiscovery,true);
+  f.store.write=write;
+  await writer.createHouseholdEnrollment(entryInput());
+  const verified=await get();
+  assert.equal(verified.stage,'verified');
+  assert.equal(verified.entryDate,pending.entryDate);
+  assert.equal(verified.durableDiscovery,pending.durableDiscovery);
+  assert.equal(await reader.getHouseholdStatus({headClientId:1,key:'absent'}),null);
+ }
+});
+
+test('adoption status uses the first group write and can read older member evidence without migrating it',async()=>{
+ const f=fixture(),{worker}=cachedHouseholdWorker(f);
+ await worker.createHouseholdEnrollment(entryInput());
+ f.entries.find(e=>e.clientId===2).projectStartDate=reviewDate;
+ f.journal.clear();
+ const input={key:'manual',householdId:30,headClientId:1,members:f.entries.map(({clientId,enrollmentId})=>({clientId,enrollmentId}))};
+ const read=()=>f.workflow().getHouseholdStatus({headClientId:1,key:input.key});
+ const write=f.store.write;
+ f.store.write=async(scope,records)=>{
+  await write(scope,records);
+  if(records.some(r=>r.key===input.key&&r.stage==='pending'))throw Error('worker interrupted during adoption');
+ };
+ await assert.rejects(worker.adoptHouseholdEnrollment(input),/worker interrupted/);
+ assert.equal((await read()).durableDiscovery,true);
+ f.store.write=write;
+ await assert.rejects(f.workflow().adoptHouseholdEnrollment(input),e=>e.code==='FORM_REVISION_UNAVAILABLE');
+ assert.equal((await read()).stage,'pending');
+ await worker.adoptHouseholdEnrollment(input);
+ const group=[...f.journal.values()].flat().find(r=>r.key===input.key);
+ delete group.memberRevisions; // 0.14.1 wrote revisions only in adopted members' snapshots.
+ const before=structuredClone(f.journal);
+ const status=await read();
+ assert.equal(status.durableDiscovery,true);
+ assert.equal(status.entryDate,new Date(entryDate).toISOString());
+ assert.equal((await f.workflow().getStatus({key:status.members[1].key,clientId:2})).entryDate,new Date(reviewDate).toISOString());
+ assert.deepEqual(f.journal,before);
+ const memberRecords=[...f.journal.values()].find(records=>Array.isArray(records)&&records.some(r=>r.key===status.members[1].key));
+ const member=memberRecords.pop();
+ group.stage='pending';
+ assert.equal(Object.hasOwn(await read(),'durableDiscovery'),false);
+ memberRecords.push({...member,intentHash:'different-adoption'});
+ assert.equal(Object.hasOwn(await read(),'durableDiscovery'),false);
+ memberRecords[0]=member;
+ delete member.formSnapshot;
+ assert.equal(Object.hasOwn(await read(),'durableDiscovery'),false);
 });

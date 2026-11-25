@@ -550,7 +550,7 @@ test('status reports pending steps without credentials, answers or new requests'
   const status=await workflow.getStatus({clientId:1,key:'entry-1'});
   assert.equal(status.kind,'entry');assert.equal(status.stage,'pending');assert.equal(status.enrollmentId,50);
   assert.deepEqual(status.steps,[{name:'enrollment',state:'verified'},{name:'scalars',state:'verified'},{name:'rows',state:'attempted'}]);
-  assert.deepEqual(Object.keys(status).sort(),['assessmentCode','enrollmentId','key','kind','recordsetIds','stage','steps']);
+  assert.deepEqual(Object.keys(status).sort(),['assessmentCode','enrollmentId','entryDate','key','kind','recordsetIds','stage','steps']);
   status.recordsetIds.injected=99;status.steps[0].state='attempted';
   assert.equal((await workflow.getStatus({clientId:1,key:'entry-1'})).steps[0].state,'verified');
   assert.deepEqual((await workflow.getStatus({clientId:1,key:'entry-1'})).recordsetIds,{});assert.deepEqual(f.counts,before);
@@ -1137,4 +1137,33 @@ test('the legacy history check requires matching rollout dates and leaves cached
  f.review.assessment.schemaRevision=(await afterRollout.discover({...f.context,entryDate:reviewDate})).schemaRevision;
  await assert.rejects(afterRollout.createInterim(f.review),e=>e.code==='PROGRAM_ASSESSMENT_CONFIGURATION_CHANGED'&&e.committed===false);
  assert.equal(f.counts.review,0);
+});
+
+test('restarted status distinguishes same-date entries and a durable review of a legacy entry',async()=>{
+ const legacy=await legacyReviewFixture(),cached=cachedWorkflowFixture();
+ await cached.worker().createEnrollment(cached.input());
+ const prior=legacy.helpers.createInterimUpdate;
+ legacy.helpers.createInterimUpdate=async input=>{await prior(input);throw Error('lost review response');};
+ await assert.rejects(legacy.worker().createInterim(legacy.review),e=>e.committed==='unknown');
+ const status=(worker,key)=>worker.getStatus({clientId:1,key});
+ const before=structuredClone(legacy.journal),calls={...legacy.calls};
+ const old=await status(legacy.worker(),legacy.entry.key);
+ const current=await status(cached.workflow(),cached.input().key);
+ assert.equal(old.stage,'verified');
+ assert.equal(Object.hasOwn(old,'durableDiscovery'),false);
+ assert.equal(current.durableDiscovery,true);
+ assert.equal(old.entryDate,new Date(entryDate).toISOString());
+ assert.equal(current.entryDate,old.entryDate);
+ const pending=await status(legacy.workflow(),legacy.review.key);
+ assert.equal(pending.stage,'pending');
+ assert.equal(pending.durableDiscovery,true);
+ assert.equal(Object.hasOwn(pending,'entryDate'),false);
+ assert.equal(await status(legacy.worker(),'absent'),null);
+ assert.deepEqual(legacy.journal,before);
+ assert.deepEqual(legacy.calls,calls);
+ legacy.helpers.createInterimUpdate=prior;
+ await legacy.worker().createInterim(legacy.review);
+ const verified=await status(legacy.workflow(),legacy.review.key);
+ assert.equal(verified.stage,'verified');
+ assert.equal(verified.durableDiscovery,true);
 });

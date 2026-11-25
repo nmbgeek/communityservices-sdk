@@ -200,7 +200,7 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `FORM_FIELDS_CHANGED` | dated assessment fields changed<br>form fields changed |
 | `FORM_METADATA_DISABLED` | durable form metadata is disabled<br>form metadata disabled |
 | `FORM_REVISION_CHANGED` | assessment form changed; rebuild the plan from the refreshed discovery<br>form revision changed |
-| `FORM_REVISION_UNAVAILABLE` | form revision unavailable<br>no captured definition for this form revision<br>no form revision covers the requested date |
+| `FORM_REVISION_UNAVAILABLE` | durable discovery required to resume household adoption<br>form revision unavailable<br>no captured definition for this form revision<br>no form revision covers the requested date |
 | `FUTURE_RACE_ETHNICITY_UNSUPPORTED` | future Race and Ethnicity cannot be verified in Summary<br>future race ethnicity unsupported |
 | `HEAD_AND_HOUSEHOLD_MEMBERS_REQUIRED` | head and household members required |
 | `HEAD_CLIENT_ID_REQUIRED` | head client ID required |

@@ -26,12 +26,25 @@ export async function enrollAndReview(
   },
 ) {
   const workflow=createEnrollmentWorkflow(dependencies);
+  // Configure metadataCache according to the application's rollout for new operations.
+  async function workerFor(key:string) {
+    const status=await workflow.getStatus({clientId:input.clientId,key});
+    if (status?.durableDiscovery && !dependencies.metadataCache) {
+      throw new Error('Restore the original metadata cache to resume this operation');
+    }
+    if (status && !status.durableDiscovery && dependencies.metadataCache) {
+      const {metadataCache,...legacyOptions}=dependencies;
+      return createEnrollmentWorkflow(legacyOptions);
+    }
+    return workflow;
+  }
   const context={clientId:input.clientId,providerId:input.providerId,type:input.type,entryDate:input.entryDate};
-  const catalog=await workflow.discover(context);
+  const enrollmentKey=`${input.sourceId}:entry`;
+  const entryWorker=await workerFor(enrollmentKey);
+  const catalog=await entryWorker.discover(context);
   // Render catalog.entry/interim.definition in the application's intake form.
   // Plans must explicitly cover applicable fields and all required verification types.
-  const enrollmentKey=`${input.sourceId}:entry`;
-  const entry=await workflow.createEnrollment({
+  const entry=await entryWorker.createEnrollment({
     ...context,key:enrollmentKey,assessment:{...input.buildEntryPlan(catalog), ...(catalog.schemaRevision ? {schemaRevision:catalog.schemaRevision} : {})},
   });
   // Use entry.recordsetIds and the discovered startDateField/endDateField names
@@ -40,9 +53,11 @@ export async function enrollAndReview(
   // On a rejected operation, call workflow.getStatus({clientId, key}) with that
   // operation's original key. Inspect the attempted steps before retrying the
   // same intent. Never remove the journal or generate a fresh key to bypass it.
-  const reviewCatalog=await workflow.discover({...context,entryDate:input.reviewDate});
-  const interim=await workflow.createInterim({
-    key:`${input.sourceId}:interim:${input.reviewDate}`,enrollmentKey,
+  const reviewKey=`${input.sourceId}:interim:${input.reviewDate}`;
+  const reviewWorker=await workerFor(reviewKey);
+  const reviewCatalog=await reviewWorker.discover({...context,entryDate:input.reviewDate});
+  const interim=await reviewWorker.createInterim({
+    key:reviewKey,enrollmentKey,
     clientId:input.clientId,reviewDate:input.reviewDate,
     assessment:{...input.buildInterimPlan(entry,reviewCatalog), ...(reviewCatalog.schemaRevision ? {schemaRevision:reviewCatalog.schemaRevision} : {})},
   });

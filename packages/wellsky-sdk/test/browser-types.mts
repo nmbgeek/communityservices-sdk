@@ -57,6 +57,14 @@ void birthDate.update({clientId:1,key:'dob-3',assessmentCode:'ENTRY',dateOfBirth
 import {createEnrollmentWorkflow,createProgramDiscovery,type BirthDateSnapshot} from '../browser/index.mjs';
 const birthDates=createDateOfBirth({api,store,ui:createDateOfBirthUi({page:session.page})});
 const enrollmentWorkflow=createEnrollmentWorkflow({api,store,birthDates,helpers:session.helpers,enrollmentSession:session.enrollmentSession,discovery:createProgramDiscovery({page:session.page})});
+for (const status of [
+  await enrollmentWorkflow.getStatus({clientId:1,key:'entry'}),
+  await enrollmentWorkflow.getHouseholdStatus({headClientId:1,key:'household-entry'}),
+]) {
+  const captured:true|undefined=status?.durableDiscovery;
+  const originalInstant:string|undefined=status?.entryDate;
+  void [captured,originalInstant];
+}
 const individualExit:Promise<import('@choiceapps/communityservices-sdk/browser').ExitEnrollmentResult>=enrollmentWorkflow.exitEnrollment({key:'exit',enrollmentKey:'entry',clientId:1,exitDate:'2026-11-10T16:00:00Z',destination:'Rental by client',reasonForLeaving:'Completed program',assessment:{}});
 void individualExit;
 void enrollmentWorkflow.correctEntry({key:'correction',enrollmentKey:'entry',clientId:1,answers:{SCORE:{value:12}},clear:['OLD_PATH'],subassessments:[{key:'original-row',parentField:'ROWS',answers:{TYPE:{option:{code:'NEW'}}},clear:['DETAILS']}]});

@@ -130,6 +130,14 @@ Add a revision at rollout and retain the old one for backdated work. Capture the
 
 Pin each member's plan using its discovery's `schemaRevision`. A recognized schema error triggers one read-only refresh of the affected phase and its provider defaults. On `FORM_REVISION_CHANGED`, use `error.discovery` to rebuild a plan if the operation has not started. After a possible write, resume with the original key and intent. The workflow uses the original journal for reconciliation and blocks new submissions against a changed form.
 
+#### Choosing discovery after a restart
+
+Read `getStatus({clientId,key})` or `getHouseholdStatus({headClientId,key})` before rebuilding a plan. Both read the local journal. A missing key returns `null`. For a pending or verified operation, `durableDiscovery: true` means the operation captured form revisions. Legacy operations omit the field. An existing Interim Review has its own mode, even when its enrollment used legacy discovery.
+
+Entry status also returns `entryDate`, the original journaled ISO instant. Household entry status uses the head’s entry instant. Use a member’s individual entry status for that member’s own start. When starting a new review on a legacy entry, compare the journaled entry instant and the proposed review instant against the application’s rollout schedule before selecting durable discovery.
+
+A household records its revisions before the first member write. For adoptions created before 0.14.2, the SDK checks the individual adoption journals locally. It reports durable discovery when all members have matching adoption records with captured revisions. An incomplete older adoption may have insufficient evidence to identify its mode. In that case the field is absent.
+
 #### Interim Reviews for entries created before durable discovery
 
 A verified 0.13 entry can include historical subassessment fields in its journal hash. To start a new Interim Review, call `discover` for the review date and pass its `schemaRevision` on the assessment plan. If the entry hash differs, the SDK checks that both dates fall in the same currently active revision declared by the application. It checks live provider defaults, reads both forms in the enrolled client's context at the entry date, and rebuilds both the configured definition and the legacy definition from those responses. The original hash must match, and every configured field must retain its properties. The SDK also checks automatic write labels against the pinned review. A successful review receipt includes `legacyEntrySchemaVerified: true` when this check was needed.

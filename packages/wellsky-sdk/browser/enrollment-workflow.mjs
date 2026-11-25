@@ -585,7 +585,14 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     for(const r of snapshots){
      const context={clientId:r.target.clientId,providerId:r.s.providerId,type:r.s.enrollmentType,entryDate:new Date(r.start).toISOString()};
      const existing=prior.get(r.target.clientId);
-     const discovered=await discover(context,false,{legacy:Boolean(existing&&!existing.formSnapshot)}),schemaHash=journalSchema(discovered);
+     // A pending adoption already chose a mode for members it has yet to journal.
+     const pins=group?.memberRevisions;
+     const legacy=existing?!existing.formSnapshot:pins!==undefined&&!pins[r.target.clientId];
+     const discovered=await discover(context,false,{legacy}),schemaHash=journalSchema(discovered);
+     if(!existing&&pins?.[r.target.clientId]&&pins[r.target.clientId]!==discovered.schemaRevision){
+      if(!discovered.schemaRevision)fail('durable discovery required to resume household adoption',{code:'FORM_REVISION_UNAVAILABLE'});
+      changed(discovered);
+     }
      const headQuestion=discovered.entry.definition.questions.find(q=>q.fieldName==='HUD_RELATIONTOHOH');
      if(native&&!headQuestion&&group?.stage!=='verified')fail('native adoption requires original entry head relationship evidence',{code:'ADOPTION_HEAD_EVIDENCE_REQUIRED'});
      if(headQuestion){
@@ -599,7 +606,14 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const wasVerified=household?group?.stage==='verified':prior.get(input.clientId)?.stage==='verified';
     const results=prepared.map(r=>({key:r.key,outcome:wasVerified?'already-present':'verified',clientId:r.context.clientId,enrollmentId:r.enrollmentId,assessmentCode:r.assessmentCode,effectiveDate:r.context.entryDate,recordsetIds:structuredClone(r.rows)}));
     if(household){
-     if(!group){group={version:1,key:input.key,kind:'entry',adopted:true,intentHash,context:{householdId:input.householdId,headClientId:input.headClientId,providerId:head.s.providerId,type:head.s.enrollmentType,entryDate:new Date(head.start).toISOString()},clientIds:ids,stage:'pending',members:{},attached:true};groups.push(group);}
+     if(!group){
+      const memberRevisions={};
+      for(const member of prepared){
+       if(member.formSnapshot?.schemaRevision)memberRevisions[member.context.clientId]=member.formSnapshot.schemaRevision;
+      }
+      group={version:1,key:input.key,kind:'entry',adopted:true,intentHash,context:{householdId:input.householdId,headClientId:input.headClientId,providerId:head.s.providerId,type:head.s.enrollmentType,entryDate:new Date(head.start).toISOString()},clientIds:ids,stage:'pending',members:{},memberRevisions,attached:true};
+      groups.push(group);
+     }
      if(native){group.context.groupId=head.s.groupId;group.context.householdSource='native-enrollment';}
      await store.write(householdScope(input.headClientId),structuredClone(groups));
      for(const clientId of ids)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'pending'}]));
@@ -899,13 +913,34 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
   discoverExit:input=>execute('discoverExit',()=>discover(input,true)),
   async getHouseholdStatus(input){
    return execute('getHouseholdStatus',async()=>{
-   fields(input,['headClientId','key']);if(!positive(input.headClientId))fail('head client ID required');key(input.key);
-   return store.withLock(householdScope(input.headClientId),async()=>{
-    const records=await store.read(householdScope(input.headClientId));if(!Array.isArray(records))fail('invalid household journal');
-    const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate household journal keys');const record=matches[0];if(!record)return null;
-    if(record.version!==1||!object(record.members))fail('invalid household journal');
-    return {key:record.key,kind:record.kind,stage:record.stage,householdId:record.context.householdId,...(record.context.groupId!==undefined?{groupId:record.context.groupId,householdSource:record.context.householdSource}:{}),headClientId:input.headClientId,members:record.clientIds.map(clientId=>({clientId,key:memberKey(input.key,clientId),...structuredClone(record.members[clientId]??{})}))};
-   });
+    fields(input,['headClientId','key']);if(!positive(input.headClientId))fail('head client ID required');key(input.key);
+    let adoptionIntent;
+    const status=await store.withLock(householdScope(input.headClientId),async()=>{
+     const records=await store.read(householdScope(input.headClientId));if(!Array.isArray(records))fail('invalid household journal');
+     const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate household journal keys');const record=matches[0];if(!record)return null;
+     if(record.version!==1||!object(record.members))fail('invalid household journal');
+     if(record.adopted&&record.memberRevisions===undefined)adoptionIntent=record.intentHash;
+     return {key:record.key,kind:record.kind,stage:record.stage,householdId:record.context.householdId,
+      ...(record.kind==='entry'&&record.context.entryDate?{entryDate:record.context.entryDate}:{}),
+      ...(Object.keys(record.memberRevisions??{}).length?{durableDiscovery:true}:{}),
+      ...(record.context.groupId!==undefined?{groupId:record.context.groupId,householdSource:record.context.householdSource}:{}),
+      headClientId:input.headClientId,members:record.clientIds.map(clientId=>({clientId,key:memberKey(input.key,clientId),...structuredClone(record.members[clientId]??{})}))};
+    });
+    // Older adoptions stored pins only in the individual journals. Release the household
+    // lock before taking member locks, since writers acquire client locks first.
+    if(adoptionIntent&&status.members.length){
+     for(const {clientId,key} of status.members){
+      const pinned=await store.withLock(scope(clientId),async()=>{
+       const records=await store.read(scope(clientId));if(!Array.isArray(records))fail('invalid workflow journal');
+       const matches=records.filter(r=>r.key===key);if(matches.length>1)fail('duplicate journal keys');
+       const member=matches[0];
+       return member?.version===1&&member.kind==='entry'&&member.adopted&&member.intentHash===adoptionIntent&&member.formSnapshot?.schemaRevision;
+      });
+      if(!pinned)return status;
+     }
+     status.durableDiscovery=true;
+    }
+    return status;
    });
   },
   discover:input=>execute('discover',()=>discover(input)),createEnrollment:input=>execute('createEnrollment',operation=>run('entry',input,{operation})),createInterim:input=>execute('createInterim',operation=>run('interim',input,{operation})),exitEnrollment:input=>execute('exitEnrollment',operation=>run('exit',input,{standaloneExit:true,operation})),
@@ -916,7 +951,10 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const records=await store.read(scope(input.clientId));if(!Array.isArray(records))fail('invalid workflow journal');
     const matches=records.filter(r=>r.key===input.key);if(matches.length>1)fail('duplicate journal keys');const r=matches[0];if(!r)return null;
     if(r.version!==1||!object(r.steps))fail('invalid workflow journal');
-    return {key:r.key,kind:r.kind,stage:r.stage,assessmentCode:r.assessmentCode,...(r.enrollmentId?{enrollmentId:r.enrollmentId}:{}),...(r.reviewId?{reviewId:r.reviewId}:{}),...(r.projectExitDate?{projectExitDate:r.projectExitDate,exitSubgroupId:r.exitSubgroupId}:{}),...(r.resolution?{resolution:structuredClone(r.resolution)}:{}),recordsetIds:structuredClone(r.rows),steps:Object.entries(r.steps).map(([name,step])=>({name,state:step.state,...(step.failure?{failure:correctionFailureDetails(step.failure)}:{})}))};
+    return {key:r.key,kind:r.kind,stage:r.stage,assessmentCode:r.assessmentCode,
+     ...(r.kind==='entry'&&r.context?.entryDate?{entryDate:r.context.entryDate}:{}),
+     ...(r.formSnapshot?.schemaRevision?{durableDiscovery:true}:{}),
+     ...(r.enrollmentId?{enrollmentId:r.enrollmentId}:{}),...(r.reviewId?{reviewId:r.reviewId}:{}),...(r.projectExitDate?{projectExitDate:r.projectExitDate,exitSubgroupId:r.exitSubgroupId}:{}),...(r.resolution?{resolution:structuredClone(r.resolution)}:{}),recordsetIds:structuredClone(r.rows),steps:Object.entries(r.steps).map(([name,step])=>({name,state:step.state,...(step.failure?{failure:correctionFailureDetails(step.failure)}:{})}))};
    });
    });
   },

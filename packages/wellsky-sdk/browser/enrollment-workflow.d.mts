@@ -149,6 +149,10 @@ export interface ExitWorkflowResult extends EnrollmentWorkflowResult {projectExi
 export interface ExitEnrollmentResult extends EnrollmentWorkflowResult {projectExitDate:string;exitSubgroupId:string|null;}
 export interface ExitWorkflowDiscovery extends EnrollmentWorkflowDiscovery {exit:{assessment:ProviderAssessmentItem;definition:AssessmentDefinition};}
 export interface EnrollmentWorkflowStatus {
+  /** Present when the journal establishes durable discovery for this operation. */
+  durableDiscovery?:true;
+  /** Original journaled entry instant. Present on entry status. */
+  entryDate?:string;
   key:string;
   kind:'entry'|'interim'|'exit'|'correction';
   stage:'pending'|'verified'|'rejected';
@@ -241,6 +245,10 @@ export interface HouseholdEnrollmentResult {
 export interface HouseholdInterimResult extends Omit<HouseholdEnrollmentResult,'members'> {members:InterimWorkflowResult[];}
 export interface HouseholdExitResult extends Omit<HouseholdEnrollmentResult,'members'> {members:ExitWorkflowResult[];}
 export interface HouseholdWorkflowStatus {
+  /** Present when the journal establishes durable discovery for this operation. */
+  durableDiscovery?:true;
+  /** Original journaled entry instant. Present on entry status. */
+  entryDate?:string;
   groupId?:number|string;
   householdSource?:'native-enrollment';
   key:string;

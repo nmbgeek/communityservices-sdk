@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.2 - 2026-11-25
+
+- Expose `durableDiscovery` on individual and household workflow status when the operation captured form revisions. Entry status includes the original `entryDate`. Restarted workers can select discovery from the journal before rebuilding a plan, including a pending household or an Interim Review on a legacy entry. Fixes #15.
+
 ## 0.14.1 - 2026-11-25
 
 - Allow a pinned Interim Review for a verified legacy enrollment when its original journal hash can be reproduced and only historical answer fields explain the difference within the declared form revision. A stale plan receives refreshed discovery before submission. Fixes #14.
