@@ -1,3 +1,4 @@
+import {classifyProfilePut,createProfileDiagnostics} from './client-profile-diagnostics.mjs';
 import {apiScope} from './connection.mjs';
 import {createHash} from 'node:crypto';
 import {toItems} from '../dist/esm/index.js';
@@ -13,7 +14,7 @@ const instant=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.
 
 /** Client Record section only. REST preserves the complete record; Sex uses the UI.
  * Durable hashes prevent replay of uncertain writes without retaining SSNs in the journal. */
-export function createClientProfile({api,ui,store}) {
+export function createClientProfile({api,ui,store,onDiagnostic}) {
  const tenantScope=apiScope(api, ui);
  if(!ui?.inspect||!ui?.updateSex||!store)throw Error('REST client, profile UI and durable store required');
  const readRest=async clientId=>{
@@ -41,54 +42,153 @@ export function createClientProfile({api,ui,store}) {
   if(Object.keys(restChanges).length&&!instant(dateEffective))throw Error('Timezone-qualified dateEffective required for REST profile changes');
   if(dateEffective!==undefined&&!instant(dateEffective))throw Error('Invalid dateEffective');
   const keyHash=digest(key),intentHash=digest({clientId,changes,dateEffective});
-  return store.withLock(JSON.stringify([tenantScope,'client-profile',clientId]),async()=>{
-   const scope=JSON.stringify([tenantScope,'client-profile',clientId]),entries=await store.read(scope);
+  const scope=JSON.stringify([tenantScope,'client-profile',clientId]);
+  const trace=createProfileDiagnostics(onDiagnostic,key,scope,changes);
+  try{return await store.withLock(scope,async()=>{
+   const entries=await store.read(scope);
    if(!Array.isArray(entries))throw Error('Invalid profile journal');
    let entry=entries.find(e=>e.keyHash===keyHash);
    if(entries.filter(e=>e.keyHash===keyHash).length>1||entry&&entry.intentHash!==intentHash)throw Error('Profile key conflicts with an earlier intent');
    if(entries.some(e=>e.keyHash!==keyHash&&e.stage!=='verified'))throw Error('Another profile update is unresolved');
    if(entry&&(!['planned','rest-attempted','rest-verified','ui-attempted','verified'].includes(entry.stage)||entry.version!==1))throw Error('Invalid profile journal stage');
    const wasVerified=entry?.stage==='verified';
+   let phase=entry?'reconciliation':'preflight';
    const persist=async stage=>{
-    entry={...entry,version:1,keyHash,intentHash,stage};
-    const i=entries.findIndex(e=>e.keyHash===keyHash);if(i<0)entries.push(entry);else entries[i]=entry;
-    await store.write(scope,structuredClone(entries));
+    const next={...entry,version:1,keyHash,intentHash,stage};
+    const i=entries.findIndex(e=>e.keyHash===keyHash);
+    const records=entries.slice();records[i<0?records.length:i]=next;
+    await store.write(scope,structuredClone(records));
+    entries[i<0?entries.length:i]=next;entry=next;
    };
-   let snapshot=await ui.inspect(clientId),rest=await readRest(clientId);
-   for(const [field,options] of Object.entries(snapshot.choices))if(field in changes&&!options.includes(changes[field]))throw Error(`Unavailable Client Record choice: ${field}`);
+   const failure=async(transport,reason,nextAction,comparison,error)=>{
+    if(!trace)return;
+    if(comparison?.protectedFieldsMatch===false&&(reason==='REST_TARGET_MISMATCH'||reason==='UI_TARGET_MISMATCH')){
+     reason='PROTECTED_FIELDS_CHANGED';
+    }
+    const first=trace.record(entry,transport,phase,reason,nextAction,comparison,error);
+    if(entry&&!entry.firstFailure&&entries.includes(entry)){
+     entry.firstFailure=first;
+     // The attempt marker is already durable. Failure to save optional evidence must
+     // preserve the original error and the normal readback/reconciliation path.
+     try{await store.write(scope,structuredClone(entries));}catch{}
+    }
+   };
+   const observe=async transport=>{
+    try{return transport==='ui'?await ui.inspect(clientId):await readRest(clientId);}
+    catch(error){
+     await failure(transport,transport==='ui'?'UI_READ_FAILED':'REST_READ_FAILED','verify-same-key',undefined,error);
+     throw error;
+    }
+   };
+   let snapshot=await observe('ui'),rest=await observe('rest');
+   for(const [field,options] of Object.entries(snapshot.choices)){
+    if(Object.hasOwn(changes,field)&&!options.includes(changes[field])){
+     await failure('ui','CHOICE_UNAVAILABLE','staff-review');
+     throw Error(`Unavailable Client Record choice: ${field}`);
+    }
+   }
    const core=pick(rest,restKeys);
-   if(!same(snapshot.values,core))throw Error('Client Record REST and UI disagree');
+   const checkSources=async(values,message)=>{
+    if(!same(snapshot.values,values)){
+     await failure('ui','REST_UI_DISAGREE','staff-review',trace?.sourceComparison(values,snapshot.values));
+     throw Error(message);
+    }
+   };
+   await checkSources(core,'Client Record REST and UI disagree');
    if(!entry){
-    const target={...core,...restChanges};
-    entry={restExpectedHash:digest(target),protectedHash:digest(pick(rest,protectedKeys)),uiExpectedHash:digest({...target,sex:changes.sex??snapshot.values.sex})};
+    const target={...core,...restChanges},uiTarget={...target,sex:changes.sex??snapshot.values.sex},protectedValues=pick(rest,protectedKeys);
+    entry={restExpectedHash:digest(target),protectedHash:digest(protectedValues),uiExpectedHash:digest(uiTarget)};
+    if(trace)entry.protectedFieldTags=trace.protectedTags({...uiTarget,...protectedValues});
     await persist('planned');
    }
    const protectedMatch=()=>digest(pick(rest,protectedKeys))===entry.protectedHash;
-   if(!protectedMatch())throw Error('Unrequested profile fields changed; reconcile before continuing');
+   const restComparison=()=>{
+    if(!trace)return;
+    const values=pick(rest,restKeys),unchanged=digest({...values,...restChanges})===entry.restExpectedHash&&protectedMatch();
+    return trace.targetComparison('rest-target',{...values,...pick(rest,protectedKeys)},entry,unchanged);
+   };
+   const uiComparison=()=>{
+    if(!trace)return;
+    const values=pick(snapshot.values,[...restKeys,'sex']);
+    return trace.targetComparison('ui-target',values,entry,digest({...values,...changes})===entry.uiExpectedHash);
+   };
+   if(!protectedMatch()){
+    await failure('rest','PROTECTED_FIELDS_CHANGED','staff-review',restComparison());
+    throw Error('Unrequested profile fields changed; reconcile before continuing');
+   }
    let restMatches=digest(pick(rest,restKeys))===entry.restExpectedHash;
    if(!restMatches){
-    if(entry.stage!=='planned')throw Error('REST profile update unresolved or changed; refusing another write');
+    if(entry.stage!=='planned'){
+     await failure('rest','REST_TARGET_MISMATCH','staff-review',restComparison());
+     throw Error('REST profile update unresolved or changed; refusing another write');
+    }
     // WellSky clears SSN when omitted, even during a middle-name-only update.
     const body={...pick(rest,restKeys),...restChanges,dateEffective};
-    if(digest(pick(body,restKeys))!==entry.restExpectedHash)throw Error('Client Record changed before REST update');
+    if(digest(pick(body,restKeys))!==entry.restExpectedHash){
+     await failure('rest','PROTECTED_FIELDS_CHANGED','staff-review',restComparison());
+     throw Error('Client Record changed before REST update');
+    }
     await persist('rest-attempted');
-    let error;try{await api.clients.update({path:{client_id:clientId},body});}catch(e){error=e;}
-    rest=await readRest(clientId);
+    phase='write';
+    let error;
+    try{
+     await api.clients.update({path:{client_id:clientId},body});
+     if(trace)trace.writes.rest='dispatched';
+    }catch(e){
+     error=e;
+     if(trace){
+      const {dispatch,reason}=classifyProfilePut(e);
+      trace.writes.rest=dispatch;
+      await failure('rest',reason,reason==='REST_WRITE_UNCONFIRMED'?'verify-same-key':'staff-review',undefined,e);
+     }
+    }
+    phase='readback';
+    rest=await observe('rest');
     restMatches=digest(pick(rest,restKeys))===entry.restExpectedHash;
-    if(!restMatches||!protectedMatch())throw error??Error('REST profile readback mismatch; journal blocks another write');
-    snapshot=await ui.inspect(clientId);
-    if(!same(snapshot.values,pick(rest,restKeys)))throw Error('Client Record UI did not reflect the REST update');
+    if(!restMatches||!protectedMatch()){
+     const reason=protectedMatch()?'REST_TARGET_MISMATCH':'PROTECTED_FIELDS_CHANGED';
+     await failure('rest',reason,'staff-review',restComparison());
+     throw error??Error('REST profile readback mismatch; journal blocks another write');
+    }
+    snapshot=await observe('ui');
+    await checkSources(pick(rest,restKeys),'Client Record UI did not reflect the REST update');
    }
    if(entry.stage==='planned'||entry.stage==='rest-attempted')await persist('rest-verified');
+   trace?.record(entry,'rest',phase,'REST_VERIFIED','none',restComparison());
    if(digest(snapshot.values)!==entry.uiExpectedHash){
-    if(entry.stage==='ui-attempted'||wasVerified)throw Error('Client Record UI save unresolved or changed; refusing another save');
-    if(changes.sex===undefined)throw Error('Unrequested Sex value changed');
-    snapshot=await ui.updateSex({clientId,sex:changes.sex,expected:snapshot.values,beforeSave:()=>persist('ui-attempted')});
+    if(entry.stage==='ui-attempted'||wasVerified){
+     await failure('ui','UI_TARGET_MISMATCH','staff-review',uiComparison());
+     throw Error('Client Record UI save unresolved or changed; refusing another save');
+    }
+    if(changes.sex===undefined){
+     await failure('ui','PROTECTED_FIELDS_CHANGED','staff-review',uiComparison());
+     throw Error('Unrequested Sex value changed');
+    }
+    phase='write';
+    try{
+     snapshot=await ui.updateSex({clientId,sex:changes.sex,expected:snapshot.values,beforeSave:async()=>{
+      await persist('ui-attempted');if(trace)trace.writes.ui='unknown';
+     },...(trace?{afterSaveClick:()=>{trace.writes.ui='dispatched';}}:{})});
+     if(trace&&trace.writes.ui==='unknown')trace.writes.ui='dispatched';
+    }catch(error){
+     const attempted=entry.stage==='ui-attempted';
+     await failure('ui',attempted?'UI_SAVE_UNCONFIRMED':'UI_PREPARATION_FAILED','verify-same-key',undefined,error);
+     throw error;
+    }
    }
-   rest=await readRest(clientId);
-   if(digest(snapshot.values)!==entry.uiExpectedHash||digest(pick(rest,restKeys))!==entry.restExpectedHash||!protectedMatch())throw Error('Profile verification mismatch; journal blocks replay');
-   await persist('verified');return {clientId,key,outcome:wasVerified?'already-present':'verified',values:snapshot.values};
-  });
+   phase='final';
+   rest=await observe('rest');
+   const uiMatches=digest(snapshot.values)===entry.uiExpectedHash;
+   if(!uiMatches||digest(pick(rest,restKeys))!==entry.restExpectedHash||!protectedMatch()){
+    if(!protectedMatch())await failure('rest','PROTECTED_FIELDS_CHANGED','staff-review',restComparison());
+    else if(!uiMatches)await failure('ui','UI_TARGET_MISMATCH','staff-review',uiComparison());
+    else await failure('rest','REST_TARGET_MISMATCH','staff-review',restComparison());
+    throw Error('Profile verification mismatch; journal blocks replay');
+   }
+   await persist('verified');
+   trace?.record(entry,'ui',phase,'PROFILE_VERIFIED','none',uiComparison());
+   return {clientId,key,outcome:wasVerified?'already-present':'verified',values:snapshot.values};
+  });}finally{trace?.flush();}
  };
  return {read,update};
 }

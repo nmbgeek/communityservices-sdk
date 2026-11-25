@@ -177,6 +177,8 @@ Use the helper for the business operation you need. Raw REST calls expose the AP
 
 Before writing, discover the program's current assessment and picklist definitions and collect the application's intended answers. Do not copy numeric choice IDs or fixture values from another tenant. The [typed examples](../examples/README.md) show the dependencies and inputs required by each workflow; most export functions for your application to call rather than running on import.
 
+The bundled store flushes each journal file before renaming it into place. On POSIX it also syncs the parent directory. Windows does not support that directory flush through Node.
+
 Use `createFileGwtMutationStore('/persistent/private/sdk-journal')` for a single-host durable journal, or implement the store contract with shared locking for multiple hosts. Pass the same store to the cooperating helpers. `openEnrollmentSession({tenant, chromium, envFile, store})` returns the authenticated session together with enrollment helpers, an enrollment reader, and client workflows.
 
 Use a stable upstream event ID as the operation's `key`, such as an intake record ID or contact event ID. Reuse that key, the original intent, and the same journal when resuming. Different real events need different keys even when dates and answers match. Persist returned record IDs and workflow results in your application. A temporary or in-memory journal cannot reconcile a process restart.

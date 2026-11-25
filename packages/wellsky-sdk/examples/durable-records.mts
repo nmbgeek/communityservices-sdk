@@ -1,7 +1,7 @@
 import type {WellSkyClient} from '@choiceapps/communityservices-sdk';
 import {
-	createClientCreator, createHouseholds, createCasePlans,
-	type UiMutationStore, type HouseholdUi, type CasePlanUi,
+	createClientCreator, createHouseholds, createCasePlans, createClientProfile,
+	type UiMutationStore, type HouseholdUi, type CasePlanUi, type ClientProfileUi, type ProfileWriteDiagnostic,
 	type ClientCreationInput, type HouseholdMemberInput,
 	type NoteValues, type GoalValues, type ActionValues,
 	type ClientWorkflows, type ServiceRecorder, type ServiceRecordInput,
@@ -75,4 +75,10 @@ export async function recordServiceBatch(recorder:ServiceRecorder, rows:ServiceR
 		return [{key:row.key,message:row.message,error:row.error,nextAction}];
 	});
 	return {...batch,failures};
+}
+
+
+/** The caller supplies its own sink for classified evidence from each update. */
+export function profileWithDiagnostics(api:WellSkyClient, store:UiMutationStore, ui:ClientProfileUi, report:(event:ProfileWriteDiagnostic)=>void) {
+ return createClientProfile({api,store,ui,onDiagnostic:report});
 }

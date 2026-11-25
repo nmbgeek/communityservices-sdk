@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.4 - 2026-11-25
+
+- Add opt-in, value-free diagnostics to Client Record updates. Events describe each call’s REST and UI writes, verification results, and first observed failure across same-key retries. Implements #17.
+- Fix Windows file journals reporting a failed write after the record had already been saved. Password recovery can now confirm the saved attempt and restore the original password.
+
 ## 0.14.3 - 2026-11-25
 
 - Wait for the WellSky username form to finish initializing before submission and recognize the labelled Google Authenticator link in Okta’s factor chooser. Accept both dashboard URL forms during sign-in, session checks, and password recovery. Fixes #16.

@@ -27,6 +27,31 @@ Use the same key, input and durable store for retries. The helper verifies fresh
 
 REST changes require a timezone-qualified `dateEffective`; Sex uses the current UI audit context. The two writes are not atomic. DOB, DOB quality, legacy Gender, race/ethnicity, phone and email are outside this helper's changes. Use the Birth dates helper below for the separately verified DOB conversion and existing-answer correction path. The Client Record helper does not apply any DOB correction. Use [Race and Ethnicity](assessments.md#race-and-ethnicity-combinations) for verified race writes and explicit repair. Existing assessment helpers remain separate from Client Record updates.
 
+### Diagnose a stopped profile update
+
+Pass `onDiagnostic` to `createClientProfile` to receive structured verification events for `update`. Leave it unset to disable diagnostics. The callback runs after the journal lock is released. A thrown error or rejected listener promise leaves the update result and replay rules intact.
+
+```ts
+const profile = createClientProfile({
+  api: client, store, ui: createClientProfileUi({page: session.page}),
+  onDiagnostic(event) {
+    if (event.nextAction === 'staff-review') showSyncWarning(event);
+  },
+});
+```
+
+| Event evidence | How to use it |
+| --- | --- |
+| `phase`, `stage`, `reason`, `transport` | Identify the specific read, write, or comparison and the journal stage it reached. |
+| `writes.rest`, `writes.ui` | Activity on this call through the reported check. `read-only` means no write on that transport. `dispatched` means the SDK observed a REST response or a completed UI Save click/adapter call. `unknown` means an attempt was recorded and dispatch could not be confirmed. Readback establishes whether the intended values were saved. |
+| `firstFailure` | The earliest classified failure recorded with diagnostics enabled. It retains the stage, dispatch evidence, original HTTP status or browser failure when known. A later verification error has its own reason. |
+| `comparison` | For a target comparison the flags describe requested and preserved fields on the reported transport. For `rest-ui` they describe agreement between the two reads. A list contains only allowlisted field names. An older or previously uninstrumented journal can report aggregate matches with `fieldDetail: 'unavailable'`. |
+| `nextAction` | `verify-same-key` calls for a fresh read using the original inputs and journal. `staff-review` calls for reviewing the outstanding discrepancy or rejection. `none` means that check passed. Only the terminal `PROFILE_VERIFIED` event confirms the whole update. |
+
+For example, a PUT rejected with HTTP 401 can be followed by a same-key read that still finds a mismatch. The second call reports `writes.rest: 'read-only'` and retains the rejection in `firstFailure`. A timed-out UI Save may instead verify on a later call. Neither case authorizes sending the failed write again.
+
+Newly planned, instrumented operations keep operation-keyed comparison tags for unrequested fields in the private journal. Keep the same application key and protect the store. Events include only classified evidence and field names. Local input, lock, and journal errors are still returned to the caller. A process interruption or storage failure can leave the original attempt marker without optional failure detail.
+
 ## Birth dates
 
 Use `createDateOfBirth` for DOB changes in the configured tenant. Its input is a calendar date, not an instant. The tested REST path converts DOB values to fixed UTC−7, while the browser formats dates in its own timezone. This helper encodes a REST DOB at `07:00:00Z`, verifies browser compatibility before sending, then requires matching client API and fresh UI dates. It does not change shared date encoding or shift the effective timestamp.

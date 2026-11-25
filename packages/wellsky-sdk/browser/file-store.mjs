@@ -26,7 +26,10 @@ export function createFileGwtMutationStore(directory) {
       const file=await open(temporary,'wx',0o600);
       try {await file.writeFile(JSON.stringify(attempts));await file.sync();} finally {await file.close();}
       await rename(temporary,destination);
-      const dir=await open(root,'r');try {await dir.sync();}finally{await dir.close();}
+      // Windows cannot fsync a directory handle. The file itself was synced before the rename.
+      if(process.platform!=='win32'){
+        const dir=await open(root,'r');try {await dir.sync();}finally{await dir.close();}
+      }
     },
   };
 }

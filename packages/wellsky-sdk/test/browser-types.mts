@@ -39,7 +39,11 @@ const wrongOption:SsvfInformation={typeOfSsvfService:'Direct provision of other 
 void wrongBranch;void wrongOption;
 
 import {createClientProfile,createClientProfileUi} from '../browser/index.mjs';
-const profile=createClientProfile({api,store,ui:createClientProfileUi({page:session.page})});
+const profile=createClientProfile({api,store,ui:createClientProfileUi({page:session.page}),onDiagnostic(event){
+ const dispatch:import('@choiceapps/communityservices-sdk/browser').ProfileWriteDispatch=event.writes[event.transport];
+ if(event.comparison?.fieldDetail==='available')event.comparison.differingFields.includes('middleName');
+ void dispatch;
+}});
 void profile.update({clientId:1,key:'profile-1',changes:{sex:'Female'}});
 void profile.update({clientId:1,key:'profile-2',dateEffective:'2026-10-23T16:00:00Z',changes:{middleName:'Synthetic',veteranStatus:'No (HUD)'}});
 // @ts-expect-error Legacy Gender is not the separate Client Record Sex field.

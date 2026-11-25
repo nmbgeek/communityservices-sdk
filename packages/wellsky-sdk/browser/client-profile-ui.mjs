@@ -42,7 +42,7 @@ export function createClientProfileUi({page}) {
   return {values,choices};
  };
  const inspect=clientId=>withPageLock(page,async()=>{await open(clientId);try{return await read();}finally{await cancel();}});
- const updateSex=({clientId,sex,expected,beforeSave})=>withPageLock(page,async()=>{
+ const updateSex=({clientId,sex,expected,beforeSave,afterSaveClick})=>withPageLock(page,async()=>{
   await open(clientId);let attempted=false,verified=false;
   try{
    const current=await read();
@@ -51,7 +51,9 @@ export function createClientProfileUi({page}) {
    if(current.values.sex===sex)return current;
    await row('Sex').locator('select').selectOption({label:sex});
    await beforeSave();attempted=true;
-   await dialog().getByRole('button',{name:'Save',exact:true}).click();await dialog().waitFor({state:'hidden'});await ready();
+   await dialog().getByRole('button',{name:'Save',exact:true}).click();
+   afterSaveClick?.();
+   await dialog().waitFor({state:'hidden'});await ready();
    await open(clientId);const result=await read();if(result.values.sex!==sex)throw Error('Sex did not persist');verified=true;return result;
   }finally{if(!attempted||verified)await cancel();}
  });
