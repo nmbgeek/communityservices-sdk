@@ -403,6 +403,8 @@ const otherDetails = {
 
 Subsidy types must match a currently available choice. Other explanations must contain 1 to 100 characters without leading/trailing whitespace or control characters. Missing, irrelevant or contradictory details fail before saving. The UI port fills each explanation beside its own labeled field and verifies the selected subsidy. `readExitDetails` reopens a saved member exit and reads its persisted details without saving. The workflow compares these details for every member on initial readback and retries; changed explanations or subsidy types conflict instead of being silently overwritten. Custom UI ports must implement `readExitDetails` to support conditional details. An unexpected legacy `Subsidy` form is still rejected because its storage contract has not been verified. Use the port through the journaled workflow, not as an independently idempotent writer. See the [typed exit example](../examples/household-exit-workflow.mts) and [live conditional-exit verification](capabilities.md).
 
+For Coordinated Entry, choose the head and other Relationship to Head of Household answers from the Entry Assessment. For a read-only household lookup by head, member IDs and dates, use [membership-only reuse](durable-records.md#reuse-a-household-for-coordinated-entry).
+
 ## Later household members and staggered exits
 
 `exitHousehold` and `createHouseholdInterim` accept selected members, including members added later. Continue supplying the original household `enrollmentKey` and `headClientId`. Each member retains their own enrollment ID and entry date. Exit subgroups are checked against the selected IDs; unselected enrollment dates, exits, conditional exit details and reviews are compared before and after a pending exit.

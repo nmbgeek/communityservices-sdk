@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.4 - 2026-11-26
+
+- Add read-only household reuse by head, member IDs and dates. Add explicit separate creation and verify uncertain creates against the original attempt (#24).
+- Limit unresolved household writes to the affected head or household. Add a read-only recovery check for operator-confirmed unapplied creates (#25).
+
 ## 0.15.3 - 2026-11-26
 
 - Report a stable DOB history reason for a verified blank at backdated entry. Keep staff review and distinguish a blank from an earlier answer in a context that requires an exact timestamp (#19).

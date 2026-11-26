@@ -2,7 +2,7 @@ import type {WellSkyClient} from '@choiceapps/communityservices-sdk';
 import {
 	createClientCreator, createHouseholds, createCasePlans, createClientProfile,
 	type UiMutationStore, type HouseholdUi, type CasePlanUi, type ClientProfileUi, type ProfileWriteDiagnostic,
-	type ClientCreationInput, type HouseholdMemberInput,
+	type ClientCreationInput, type HouseholdMemberInput, type HouseholdMembershipReuseInput, type HouseholdCreateInput,
 	type NoteValues, type GoalValues, type ActionValues,
 	type ClientWorkflows, type ServiceRecorder, type ServiceRecordInput,
 } from '@choiceapps/communityservices-sdk/browser';
@@ -33,6 +33,16 @@ export async function createPeopleAndHousehold(records:DurableRecords, input:{
 		],
 	},{reuseContainingHousehold:input.reuseContainingHousehold??false});
 	return {head,member,household};
+}
+
+/** Use these member dates for enrollment. The Entry Assessment supplies its own relationship answers. */
+export function reuseHouseholdForEntry(records:DurableRecords, input:HouseholdMembershipReuseInput) {
+	return records.households.create(input,{reuseContainingHousehold:'membership-only'});
+}
+
+/** Use a stable key for the explicitly authorized separate household. */
+export function createSeparateHousehold(records:DurableRecords, input:HouseholdCreateInput) {
+	return records.households.create(input,{createSeparateHousehold:true});
 }
 
 /** This adds household membership. Attach the person to a program separately. */

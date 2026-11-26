@@ -92,9 +92,47 @@ The helper preserves unrelated members, previous join dates, and ended records. 
 
 Household membership is separate from program enrollment. After creating the household, pass its ID to the [household enrollment workflow](enrollments.md). A later child must first belong to the household, then be attached to the program with their own entry date and assessment. Ending household membership does not exit a program. Program exits continue to use the enrollment head-coverage guards.
 
-Creation and changes reconcile exact saved state after uncertain responses. Completed retries also recognize subsequent verified changes in the same journal. External drift and unresolved attempts block writes. See [households.d.mts](../browser/households.d.mts) for all methods.
+Creation and changes reconcile exact saved state after uncertain responses. Completed retries also recognize subsequent verified changes in the same journal. An unresolved write blocks other writes for the same head or household. Work for independent households can continue. See [households.d.mts](../browser/households.d.mts) for all methods.
 
 Pass `{reuseContainingHousehold: true}` as the second argument of `households.create` to reuse an existing household of the requested type that contains the cohort. A member may have left and rejoined. Each member must have one matching relationship at their requested `dateJoined` and at selection, with the same head at both instants. The SDK excludes a candidate whose complete membership history establishes a different sole head at entry and selection. It journals the selected identity and membership intervals, then verifies them with a fresh household read. Reuse performs no household write. If no candidate contains the cohort, the normal journaled create path applies. Multiple candidates, conflicting relationships, overlaps, unclear boundaries, or changed selection evidence raise `HOUSEHOLD_MEMBERSHIP_AMBIGUOUS` with `nextAction: 'staff-review'`. Keep the original key and options on retry.
+
+### Reuse a household for Coordinated Entry
+
+Use the Relationship to Head of Household answers defined in the Entry Assessment. When the form exposes `HUD_RELATIONTOHOH›, select `RELATIONHOH_SELF› for the designated enrollment head and the appropriate non-Self answers for other members. Household Type and labels such as `Grandson› on the Household tab do not determine the assessment answers.
+
+```js
+const reused = await households.create({
+  key: sourceHouseholdSelectionId,
+  headClientId,
+  members: [
+    {clientId: headClientId, dateJoined: entryDate},
+    {clientId: memberClientId, dateJoined: entryDate},
+  ],
+}, {reuseContainingHousehold: 'membership-only'});
+```
+
+This mode ignores Household Type and Household tab relationship labels. It requires one household with the requested head and members covered by unambiguous intervals at their supplied dates and at selection. The helper rereads the selected household and records the choice in the journal. It leaves the Household tab untouched. `HOUSEHOLD_REUSE_NOT_FOUND› means no household met the selection criteria. Multiple eligible households or ambiguous membership data raise `HOUSEHOLD_MEMBERSHIP_AMBIGUOUS›.
+
+### Create a separate household
+
+When staff authorize a separate roster, call `households.create(input, {createSeparateHousehold: true})› with its own stable source key and just the relevant members. A new household can have the same members as an existing household. Supply the Household Type, the head's `Self› label, and the other Household tab labels required for creation. Enter the enrollment assessment answers separately. Without this option, default creation can reuse an exact pre-existing roster.
+
+Keep the mode, inputs, key, and journal on retry. If the create response is uncertain, the SDK uses a returned household ID and a fresh read, or a unique exact match outside the pre-create list. Inconclusive evidence leaves the original attempt pending. See [confirm an unapplied household create](#confirm-an-unapplied-household-create).
+
+### Confirm an unapplied household create
+
+First retry the original key to reconcile any created household. If the result remains unclear, establish independently that WellSky did not apply the request and record an evidence reference. An HTTP 400 or missing result alone is inconclusive. If no household ID was returned, an operator can resolve the original key after confirming non-application.
+
+```js
+await households.resolveCreateNotApplied({
+  key: originalHouseholdSourceId,
+  headClientId,
+  evidenceReference: investigationReference,
+  confirmedNotApplied: true,
+});
+```
+
+The helper checks a complete current household list against the saved pre-create list. An unfamiliar household ID or an incomplete read keeps the attempt unresolved. Resolution closes the original key in the journal and performs no WellSky mutation. An authorized new create is a separate operation with its own key.
 
 ## Create and update Client Notes, goals, and action steps
 

@@ -718,7 +718,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     const people=household[0].clients;
     if(new Set(people.map(p=>p.clientId)).size!==people.length){
      const requested=ids.map(clientId=>({clientId,dateJoined:catalog[clientId]?.entryDate??context.entryDate}));
-     if(!coveredHousehold(household[0],input.headClientId,requested))fail('member is not active in household at entry');
+     if(!coveredHousehold(household[0],input.headClientId,requested,undefined,{matchRelationships:false}))fail('member is not active in household at entry');
     }else{
      const heads=people.filter(p=>p.headofhouseholdStatus&&p.isActive!==false&&!p.dateLeft);
      if(heads.length===0)fail('invalid enrollment data: household has no active head of household');

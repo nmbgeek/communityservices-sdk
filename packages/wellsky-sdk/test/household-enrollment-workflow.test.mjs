@@ -707,15 +707,21 @@ test('a verified blank DOB blocks the entire household until a staff correction 
  assert.equal(f.counts.entry,1);assert.equal(f.counts.attach,1);assert.equal(f.writes.size,0);
  assert.equal(f.births.get(2).effectiveDate,new Date(reviewDate).toISOString());
 });
-test('household entry accepts a rejoined member with disjoint intervals and rejects overlapping history',async()=>{
- const f=fixture();f.household.householdType='Other';
+test('entry assessment checks its own head answer while household membership uses dates and head flags',async()=>{
+ const f=headFixture();f.household.householdType=null;
  for(const m of f.household.clients)m.headofhouseholdRelationship=m.clientId===1?'Self':'Other relative';
- const prior={...f.household.clients[1],dateJoined:'2026-01-01T00:00:00Z',dateLeft:entryDate,isActive:false};
+ const prior={...f.household.clients[1],headofhouseholdRelationship:'Grandson',dateJoined:'2026-01-01T00:00:00Z',dateLeft:entryDate,isActive:false};
  f.household.clients.push(prior);
- await assert.rejects(f.workflow().createHouseholdEnrollment(entryInput()),e=>e.code==='HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'&&e.committed===false);
+ await assert.rejects(f.workflow().createHouseholdEnrollment(f.entry),e=>e.code==='HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'&&e.committed===false);
  assert.equal(f.counts.entry,0);
  prior.dateLeft='2026-03-01T00:00:00Z';
- assert.equal((await f.workflow().createHouseholdEnrollment(entryInput())).members.length,2);
+ const invalid=structuredClone(f.entry);
+ invalid.members[1].assessment.answers.HUD_RELATIONTOHOH={option:{code:'RELATIONHOH_SELF'}};
+ await assert.rejects(f.workflow().createHouseholdEnrollment(invalid),/head of household change is a red flag/);
+ assert.equal(f.counts.entry,0);
+ assert.equal((await f.workflow().createHouseholdEnrollment(f.entry)).members.length,2);
+ assert.equal(f.clients.get(1).history.find(answer=>answer.field==='HUD_RELATIONTOHOH').value,'10');
+ assert.equal(f.clients.get(2).history.find(answer=>answer.field==='HUD_RELATIONTOHOH').value,'11');
 });
 
 test('household entry pins the earlier DOB revision for each member before enrollment writes',async()=>{

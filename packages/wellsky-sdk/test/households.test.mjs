@@ -117,3 +117,175 @@ test('a proven different head does not block the sole eligible household',async(
  await assert.rejects(f.reuse(),{code:'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'});
  assert.equal(f.calls.length,0);
 });
+
+const membershipOnly={reuseContainingHousehold:'membership-only'};
+const separate={createSeparateHousehold:true};
+
+test('membership-only reuse ignores Household tab labels during selection and on same-key retry',async()=>{
+ const f=reuseFixture(),request={key:f.i.key,headClientId:1,members:f.i.members.map(({clientId,dateJoined})=>({clientId,dateJoined}))};
+ f.rows[0].householdType='Female Single Parent';
+ f.old.headofhouseholdRelationship='Grandson';
+ f.clients[1].headofhouseholdRelationship='Other relative';
+ for(const member of request.members)member.dateJoined='2026-02-20T12:00:00Z';
+ const get=f.api.households.get;
+ f.api.households.get=async args=>{
+  const result=await get(args);
+  result.householdType=null;
+  result.clients.find(member=>member.clientId===2&&member.isActive).headofhouseholdRelationship=null;
+  return result;
+ };
+ const first=await f.helper().create(request,membershipOnly);
+ assert.equal(first.household.householdId,99);
+ assert.equal(first.household.householdType,null);
+ assert.equal(first.household.members.find(member=>member.clientId===2&&member.isActive).relationship,null);
+ f.rows[0].householdType='Other';
+ f.clients[1].headofhouseholdRelationship='Son';
+ assert.equal((await f.helper().create({...request,householdType:'Individual'},membershipOnly)).outcome,'already-present');
+ f.old.dateLeft=f.clients[1].dateJoined;
+ await assert.rejects(f.helper().create(request,membershipOnly),{code:'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'});
+ assert.equal(f.calls.length,0);
+});
+
+test('membership-only reuse requires a unique dated roster and a sole head across Household types',async()=>{
+ for(const mode of ['no match','multiple','multiple heads','member unavailable','head changed','detail drift']){
+  const f=reuseFixture();
+  if(mode==='no match'){f.rows.length=0;}
+  if(mode==='multiple')f.rows.push({...structuredClone(f.rows[0]),householdId:100,householdType:'Individual'});
+  if(mode==='multiple heads')f.clients[1].headofhouseholdStatus=true;
+  if(mode==='member unavailable')f.clients[1].isActive=false;
+  if(mode==='head changed'){
+   f.clients[0].dateJoined='2026-05-01T00:00:00Z';
+   f.clients.push({...f.clients[3],isActive:false,headofhouseholdStatus:true,dateJoined:'2026-01-01T00:00:00Z',dateLeft:'2026-03-01T00:00:00Z'});
+   f.i.members.forEach(member=>{member.dateJoined='2026-02-20T12:00:00Z';});
+  }
+  if(mode==='detail drift'){
+   const get=f.api.households.get;
+   f.api.households.get=async args=>{
+    const result=await get(args);result.clients.find(member=>member.clientId===2&&member.isActive).dateJoined='2026-06-01T00:00:00Z';
+    return result;
+   };
+  }
+  await assert.rejects(f.helper().create(f.i,membershipOnly),{
+   code:mode==='no match'?'HOUSEHOLD_REUSE_NOT_FOUND':'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS',
+  },mode);
+  assert.equal(f.calls.length,0);
+ }
+});
+
+test('explicit separate creation creates an exact duplicate once, even with an unsuitable baseline roster',async()=>{
+ const f=fixture(),i=input();
+ await f.helper().create(i);
+ const previous=structuredClone(f.rows[0]);
+ f.rows.push({...structuredClone(previous),householdId:20,clients:[...previous.clients,{...previous.clients[1]}]});
+ const request={...i,key:'authorized-separate'};
+ const result=await f.helper().create(request,separate);
+ assert.equal(result.household.householdId,12);
+ assert.deepEqual(f.rows[0],previous);
+ assert.equal(f.calls.length,2);
+ assert.deepEqual(f.calls[1].householdClients.map(member=>member.clientId),[1,2]);
+ assert.equal((await f.helper().create(request,separate)).outcome,'already-present');
+ await assert.rejects(f.helper().create(request),/key conflicts/);
+ await assert.rejects(f.helper().create({...request,key:'conflicting-options'},{...membershipOnly,...separate}),/cannot be combined/);
+ assert.equal(f.calls.length,2);
+});
+
+test('a separate create with a lost response reconciles the new ID and ignores the exact baseline match',async()=>{
+ const f=fixture(),i=input();
+ await f.helper().create(i);
+ const request={...i,key:'authorized-separate'},create=f.api.households.create,list=f.api.households.listForClient;
+ let readUnavailable=false;
+ f.fault('after');
+ f.api.households.create=async args=>{try{return await create(args);}finally{readUnavailable=true;}};
+ f.api.households.listForClient=async args=>{if(readUnavailable)throw Error('List temporarily unavailable');return list(args);};
+ await assert.rejects(f.helper().create(request,separate),/lost/);
+ assert.deepEqual(f.rows.map(row=>row.householdId),[10,11]);
+ readUnavailable=false;
+ assert.equal((await f.helper().create(request,separate)).household.householdId,11);
+ assert.equal((await f.helper().create(request,separate)).outcome,'already-present');
+ assert.equal(f.calls.length,2);
+});
+
+test('an attempted create never adopts a baseline ID that becomes an exact match',async()=>{
+ const f=fixture(),i=input();
+ await f.helper().create({...i,members:[i.members[0],{...i.members[1],relationship:'Son'}]});
+ f.fault('before');
+ const request={...i,key:'new-attempt'};
+ await assert.rejects(f.helper().create(request),/lost/);
+ f.rows[0].clients[1].headofhouseholdRelationship=i.members[1].relationship;
+ await assert.rejects(f.helper().create(request),/write unresolved/);
+ assert.equal(f.calls.length,2);
+});
+
+test('a returned household ID remains pinned if readback is interrupted',async()=>{
+ const f=fixture(),i=input();
+ await f.helper().create(i);
+ const request={...i,key:'with-receipt'},create=f.api.households.create,get=f.api.households.get;
+ f.api.households.create=async args=>{await create(args);return structuredClone(f.rows.at(-1));};
+ f.api.households.get=async()=>{throw Error('Detail unavailable');};
+ await assert.rejects(f.helper().create(request,separate),/Detail unavailable/);
+ f.rows.push({...structuredClone(f.rows.at(-1)),householdId:50});
+ await assert.rejects(f.helper().resolveCreateNotApplied({key:request.key,headClientId:1,confirmedNotApplied:true,evidenceReference:'case-a'}),/without a receipt/);
+ f.api.households.get=get;
+ assert.equal((await f.helper().create(request,separate)).household.householdId,11);
+ assert.equal(f.calls.length,2);
+});
+
+test('a legacy unresolved create blocks the same head but an independent head can create and update',async()=>{
+ const f=fixture(),i=input();f.fault('before');
+ await assert.rejects(f.helper().create(i),/lost/);
+ for(const entries of f.entries.values())delete entries[0].headClientId;
+ f.fault(null);
+ await assert.rejects(f.helper().create({...i,key:'same-head'},separate),/unresolved for this household or head/);
+ const other={...i,key:'other-head',headClientId:3,members:[{...i.members[0],clientId:3},{...i.members[1],clientId:4}]};
+ const result=await f.helper().create(other,separate);
+ await f.helper().updateRelationships({key:'other-update',householdId:result.household.householdId,headClientId:3,members:[{clientId:4,relationship:'Grandson'}]});
+ assert.equal(f.calls.length,3);
+});
+
+test('an unresolved update blocks writes aimed at the same household even under a different head',async()=>{
+ const f=fixture();
+ await f.helper().create(input());
+ f.fault('before');
+ const request={key:'update',householdId:10,headClientId:1,members:[{clientId:2,relationship:'Grandson'}]};
+ await assert.rejects(f.helper().updateRelationships(request),/lost/);
+ await assert.rejects(f.helper().updateRelationships({...request,key:'another-head',headClientId:2,members:[{clientId:1,relationship:'Grandson'}]}),/unresolved for this household or head/);
+ assert.equal(f.calls.length,2);
+});
+
+test('an operator can resolve a confirmed unapplied create without releasing its key for replay',async()=>{
+ const f=fixture(),i=input(),post=f.api.households.create;
+ f.api.households.create=async args=>{
+  f.fault('before');
+  try{await post(args);}catch{throw Object.assign(Error('Synthetic server rejection'),{status:400});}
+ };
+ await assert.rejects(f.helper().create(i,separate),{status:400});
+ const resolution={key:i.key,headClientId:1,evidenceReference:'staff-case-1',confirmedNotApplied:true};
+ await assert.rejects(f.helper().resolveCreateNotApplied({...resolution,confirmedNotApplied:false}),/independent confirmation/);
+ f.rows.push({householdId:20,householdType:'Other',isActive:true,clients:[{clientId:1}]});
+ await assert.rejects(f.helper().resolveCreateNotApplied(resolution),/requires reconciliation/);
+ f.rows.length=0;
+ const confirm=f.ui.confirmNoHouseholds;
+ f.ui.confirmNoHouseholds=async()=>false;
+ await assert.rejects(f.helper().resolveCreateNotApplied(resolution),{status:404});
+ f.ui.confirmNoHouseholds=confirm;
+ assert.equal((await f.helper().resolveCreateNotApplied(resolution)).outcome,'not-applied');
+ assert.equal((await f.helper().resolveCreateNotApplied(resolution)).outcome,'already-resolved');
+ await assert.rejects(f.helper().resolveCreateNotApplied({...resolution,evidenceReference:'different-evidence'}),/evidence changed/);
+ await assert.rejects(f.helper().create(i,separate),/resolved as not applied/);
+ assert.equal(f.calls.length,1);
+ f.api.households.create=post;
+ f.fault(null);
+ assert.equal((await f.helper().create({...i,key:'new-authorized-create'},separate)).household.householdId,10);
+ assert.equal(f.calls.length,2);
+});
+
+test('multiple new matching households leave an uncertain separate create unresolved',async()=>{
+ const f=fixture(),i=input();
+ await f.helper().create(i);
+ f.fault('before');
+ const request={...i,key:'uncertain-separate'};
+ await assert.rejects(f.helper().create(request,separate),/lost/);
+ f.rows.push(...[20,21].map(householdId=>({...structuredClone(f.rows[0]),householdId})));
+ await assert.rejects(f.helper().create(request,separate),/not uniquely verified/);
+ assert.equal(f.calls.length,2);
+});
