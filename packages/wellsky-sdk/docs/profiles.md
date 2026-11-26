@@ -81,9 +81,9 @@ Keep the same key, input and durable store for retries. Attempts are journaled b
 
 ### Backdated entry with a later DOB
 
-For an individual or household entry, the SDK compares the current profile, fresh UI and mobile DOB with the dated assessment question. An unanswered DOB at entry and a matching later revision raise `DOB_HISTORICAL_BACKFILL_UNSUPPORTED` with `nextAction: 'staff-review'`. Staff must review the historical field. The SDK has no verified operation that can insert that revision while preserving the later one. A conflicting value raises `DOB_HISTORY_CONFLICT`. Incomplete reads, ambiguous questions, or a later mobile row without a usable value raise `DOB_HISTORY_EVIDENCE_UNAVAILABLE`.
+For an individual or household entry, the SDK compares the current profile, fresh UI and mobile DOB with the dated assessment question. An unanswered DOB at entry and a matching later revision raise `DOB_HISTORICAL_BACKFILL_UNSUPPORTED` with `nextAction: 'staff-review'`. Staff must review the historical field. The SDK has no verified operation that can insert that revision while preserving the later one. A conflicting value raises `DOB_HISTORY_CONFLICT`. Incomplete reads or ambiguous questions raise `DOB_HISTORY_EVIDENCE_UNAVAILABLE`.
 
-Retain the original key and journal. After an authorized correction, retry the original entry. An explicit matching DOB at the requested timestamp and unchanged later evidence can be verified by reads alone (`method: 'historical-read'`). The SDK rechecks both on subsequent same-key calls. Household preflight checks every member before creating the first enrollment.
+Retain the original key and journal. After an authorized correction, retry the original entry. A dated assessment answer in effect at entry can be verified through reads alone (`method: 'historical-read'`). It must match the current profile and fresh UI DOB. The later mobile row may have a blank value when it still supplies its effective timestamp and identifies the same question as the dated answer. The result's `effectiveDate` remains the requested verification instant. `historicalEffectiveDate` and `laterEffectiveDate` identify the stored revisions that the SDK rechecks on same-key calls. Household preflight checks every member before creating the first enrollment.
 
 ## Unknown or declined birth date
 

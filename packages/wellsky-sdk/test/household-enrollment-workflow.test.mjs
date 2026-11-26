@@ -705,3 +705,26 @@ test('household entry accepts a rejoined member with disjoint intervals and reje
  prior.dateLeft='2026-03-01T00:00:00Z';
  assert.equal((await f.workflow().createHouseholdEnrollment(entryInput())).members.length,2);
 });
+
+test('household entry pins the earlier DOB revision for each member before enrollment writes',async()=>{
+ const f=householdBirthFixture();
+ f.births.set(1,{dateOfBirth:'1984-02-29',effectiveDate:new Date(reviewDate).toISOString()});
+ f.births.set(2,{dateOfBirth:'1992-07-03',effectiveDate:new Date(reviewDate).toISOString()});
+ const read=f.api.assessments.get;
+ let earlier='2026-10-17T16:00:00';
+ f.api.assessments.get=async args=>{
+  const rows=await read(args),dob=rows.find(q=>q.virt_field_name==='SVPPROFDOB');
+  const clientId=args.path.clientId;
+  Object.assign(dob,{question_id:99,client_id:clientId});
+  if(args.query?.dateEffective&&Date.parse(args.query.dateEffective)<Date.parse(reviewDate)){
+   Object.assign(dob,{answer_value:f.births.get(clientId).dateOfBirth+' 00:00:00-07',date_effective:clientId===2?earlier:'2026-10-17T16:00:00'});
+  }
+  return rows;
+ };
+ const run=()=>f.workflow().createHouseholdEnrollment(f.entry);
+ assert.equal((await run()).members.length,2);
+ assert.equal((await run()).outcome,'already-present');
+ earlier='2026-10-18T16:00:00';
+ await assert.rejects(run(),{code:'DOB_HISTORY_CONFLICT'});
+ assert.equal(f.counts.entry,1);assert.equal(f.counts.attach,1);assert.equal(f.writes.size,0);
+});

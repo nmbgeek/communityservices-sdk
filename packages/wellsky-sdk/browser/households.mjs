@@ -24,7 +24,7 @@ const model=row=>{const current=snapshot(row);guard(current.members);return curr
 const ambiguous=()=>{throw Object.assign(Error('Ambiguous household membership; staff review required'),{code:'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS',nextAction:'staff-review'});};
 
 // Used only for selecting an existing household. Keep all historical rows out of write payloads.
-export function coveredHousehold(row,headClientId,requests,now=new Date().toISOString()){
+export function coveredHousehold(row,headClientId,requests,now=new Date().toISOString(),{excludeDifferentHead=false}={}){
  let household;
  try{household=snapshot(row);}catch{ambiguous();}
  const byClient=new Map();
@@ -42,20 +42,25 @@ export function coveredHousehold(row,headClientId,requests,now=new Date().toISOS
   if(household.members.some(m=>m.dateEnded===date))ambiguous();
   const members=household.members.filter(m=>m.dateJoined<=date&&(!m.dateEnded||date<m.dateEnded));
   const heads=members.filter(m=>m.head);
-  if(members.length&&(heads.length!==1||heads[0].clientId!==headClientId))ambiguous();
-  return members;
+  if(members.length&&heads.length!==1)ambiguous();
+  return {members,head:heads[0]};
  };
  const selection=at(now),coverage=[];
- if(!selection.length)return;
- if(!selection.find(m=>m.head)?.isActive)ambiguous();
+ if(!selection.members.length)return;
+ if(!selection.head.isActive)ambiguous();
+ const differentHead=selection.head.clientId!==headClientId;
+ if(differentHead&&!excludeDifferentHead)ambiguous();
  for(const request of requests){
-  const current=selection.find(m=>m.clientId===request.clientId);
-  const entry=at(instant(request.dateJoined)).find(m=>m.clientId===request.clientId);
-  if(!current||!entry)return;
-  if(!current.isActive||entry.relationship!==current.relationship||request.relationship!==undefined&&entry.relationship!==request.relationship)ambiguous();
+  const current=selection.members.find(m=>m.clientId===request.clientId);
+  const atEntry=at(instant(request.dateJoined));
+  if(atEntry.head&&atEntry.head.clientId!==selection.head.clientId)ambiguous();
+  const entry=atEntry.members.find(m=>m.clientId===request.clientId);
+  if(!current||!entry){if(differentHead)ambiguous();return;}
+  if(!current.isActive||entry.relationship!==current.relationship)ambiguous();
+  if(!differentHead&&request.relationship!==undefined&&entry.relationship!==request.relationship)ambiguous();
   coverage.push({entry,current});
  }
- return {household,coverage};
+ if(!differentHead)return {household,coverage};
 }
 const guard=members=>{
  if(!members.length||new Set(members.map(m=>m.clientId)).size!==members.length)throw Error('Unique household members required');
@@ -119,7 +124,7 @@ export function createHouseholds({api,store,ui}) {
     listed=await list(input.headClientId,!entry);
     const candidates=listed.filter(h=>h.isActive!==false&&h.householdType===intent.householdType&&intent.members.every(m=>h.clients.some(c=>c.clientId===m.clientId)));
     const now=new Date().toISOString();
-    const covered=candidates.map(h=>coveredHousehold(h,intent.headClientId,intent.members,now)).filter(Boolean);
+    const covered=candidates.map(h=>coveredHousehold(h,intent.headClientId,intent.members,now,{excludeDifferentHead:true})).filter(Boolean);
     if(covered.length>1||!covered.length&&candidates.length)ambiguous();
     const selected=covered[0];
     if(entry?.selected&&selected?.household.householdId!==entry.householdId||entry&&!entry.selected&&selected)ambiguous();

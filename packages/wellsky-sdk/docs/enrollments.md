@@ -464,8 +464,9 @@ For street outreach and night-by-night shelter meaningful contacts, use the [Cur
 Use `createExitDeletion` with `createExitDeletionUi` from `@choiceapps/communityservices-sdk/browser`. The helper uses the trash icon in **Edit Exit Data** because the V2 and V3 REST contracts have no exit removal operation.
 
 1. Supply an authenticated Playwright page and a durable mutation store.
-2. Call `deleteExit` with the authorized `clientId`, `enrollmentId`, `providerId`, and a stable source `key`. Authorize the whole linked exit before calling. WellSky applies the confirmation to every active enrollment in that exit subgroup.
-3. Read `reopenedEnrollmentIds` from the result. Each returned enrollment stays active and has its exit data cleared. Members whose exits belong to a different subgroup keep their exits.
+2. Call `previewExit({clientId, enrollmentId, providerId})` to read the UTC exit date, the linked enrollment IDs and the IDs with separate exits. A target that is already open has a null exit date and an empty linked set. Preview uses the same subgroup validation as deletion and makes no journal or WellSky record writes.
+3. After staff confirm the linked exit, call `deleteExit` with the authorized target and stable source `key`. Pass the preview's `exitDate` as `expectedExitDate` and `linkedEnrollmentIds` as `expectedEnrollmentIds`. These optional conditions are compared against a fresh read before opening the confirmation UI. A difference raises `exit-date-changed` or `exit-members-changed` without confirming deletion.
+4. Read `reopenedEnrollmentIds` from the result. Each returned enrollment stays active and has its exit data cleared. Members whose exits belong to a different subgroup keep their exits.
 
 A verified confirmation returns `deleted`. If a fresh read verifies an uncertain confirmation, the helper returns `reconciled`. A replay of a verified operation returns `already-deleted` after a fresh read. A target that was already open returns `already-open` with an empty list.
 

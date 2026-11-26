@@ -38,7 +38,9 @@ export function createDateOfBirth({api,ui,store}){
   const client=rows[0],answers=toItems(await api.assessmentsMobile.getAnswers({path:{clientId:input.clientId,assessmentCode:input.assessmentCode}}));
   const dob=answers.filter(q=>q.virt_field_name==='SVPPROFDOB');
   if(dob.length!==1||dob[0].question_type!=='date')fail('assessment must expose one DOB date question');
-  const row=dob[0],dateOfBirth=storedDate(client.svpprofdob),hasValue=row.answer_value!==null&&row.answer_value!==undefined&&row.answer_value!=='',hasAnswer=row.date_effective!==null&&row.date_effective!==undefined&&row.date_effective!=='';
+  const row=dob[0];
+  if(row.client_id!=null&&row.client_id!==input.clientId)throw unavailable();
+  const dateOfBirth=storedDate(client.svpprofdob),hasValue=row.answer_value!==null&&row.answer_value!==undefined&&row.answer_value!=='',hasAnswer=row.date_effective!==null&&row.date_effective!==undefined&&row.date_effective!=='';
   // WellSky's mobile projection omits the value for UI-created date answers.
   // Require matching current client + fresh UI values; use the answer only for its effective date.
   if(!hasAnswer&&(hasValue||dateOfBirth!==null))throw unavailable();
@@ -57,11 +59,11 @@ export function createDateOfBirth({api,ui,store}){
  };
  // Only read history. Neither the profile PUT nor the entry form has proved it can insert
  // a backdated revision without replacing a later one.
- const checkHistory=async(input,current,expectedLater)=>{
+ const checkHistory=async(input,current,{expectedLater,expectedHistorical,allowEarlier=false}={})=>{
   if(current.dateOfBirth!==input.dateOfBirth)throw conflict('historical correction conflicts with current DOB');
-  if(!current.mobileValue||!current.effectiveDate||current.effectiveDate<=input.effectiveDate)throw unavailable();
+  if(!current.effectiveDate||current.effectiveDate<=input.effectiveDate)throw unavailable();
   if(expectedLater&&current.effectiveDate!==expectedLater)throw conflict('later DOB revision changed');
-  let row,historicalDate;
+  let row,historicalDate,historicalAt;
   try{
    const result=await api.assessments.get({path:{clientId:input.clientId,assessmentCode:input.assessmentCode},query:{dateEffective:input.effectiveDate}});
    const items=toItems(result);
@@ -69,25 +71,39 @@ export function createDateOfBirth({api,ui,store}){
    const rows=items.filter(q=>q.virt_field_name==='SVPPROFDOB');
    if(rows.length!==1||rows[0].question_type!=='date')throw unavailable();
    row=rows[0];
-   if(current.questionId!=null&&row.question_id!==current.questionId)throw unavailable();
-   if(!blank(row.answer_value))historicalDate=answerDate(row.answer_value);
-   if(historicalDate&&effective(row.date_effective)>input.effectiveDate)throw unavailable();
+   if((row.client_id!=null&&row.client_id!==input.clientId)||
+      (current.questionId!=null&&row.question_id!==current.questionId))throw unavailable();
+   if(!blank(row.answer_value)){
+    historicalDate=answerDate(row.answer_value);
+    historicalAt=effective(row.date_effective);
+    if(historicalAt>input.effectiveDate)throw unavailable();
+   }
   }catch(cause){if(cause?.nextAction||cause?.code==='SESSION_INTERRUPTED')throw cause;throw unavailable(cause);}
   if(!historicalDate){
    if(!blank(row.date_effective)||row.answer_value_text)throw unavailable();
    throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to backfill the unanswered DOB');
   }
   if(historicalDate!==input.dateOfBirth)throw conflict('dated and current DOB disagree');
-  if(effective(row.date_effective)!==input.effectiveDate)throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to verify the requested effective instant');
+  if(expectedHistorical&&historicalAt!==expectedHistorical)throw conflict('historical DOB revision changed');
+  if(historicalAt!==input.effectiveDate&&!allowEarlier)throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to verify the requested effective instant');
+  // The mobile projection can omit UI-created values. For this broader path require
+  // both reads to agree on the question ID in addition to the profile and fresh UI DOB.
+  if((!current.mobileValue||historicalAt!==input.effectiveDate)&&
+     (!Number.isSafeInteger(current.questionId)||current.questionId<1||row.question_id!==current.questionId))throw unavailable();
+  return historicalAt;
  };
  const update=async raw=>{
-  if(!raw||Object.keys(raw).some(k=>!['clientId','key','assessmentCode','dateOfBirth','effectiveDate','entry','laterEffectiveDate'].includes(k)))fail('unknown update field');
+  if(!raw||Object.keys(raw).some(k=>!['clientId','key','assessmentCode','dateOfBirth','effectiveDate','entry','laterEffectiveDate','historicalEffectiveDate'].includes(k)))fail('unknown update field');
   if(!Number.isSafeInteger(raw.clientId)||raw.clientId<1||typeof raw.key!=='string'||!raw.key.trim()||raw.key.length>200||typeof raw.assessmentCode!=='string'||!/^[A-Za-z0-9_]+$/.test(raw.assessmentCode))fail('client, stable key and assessment code required');
   const input={...structuredClone(raw),dateOfBirth:validateBirthDate(raw.dateOfBirth),effectiveDate:instant(raw.effectiveDate)};
   if(input.dateOfBirth>input.effectiveDate.slice(0,10))fail('birth date follows effective date');
   if(input.entry&&(!Number.isSafeInteger(input.entry.enrollmentId)||input.entry.enrollmentId<1||typeof input.entry.assessmentName!=='string'||!input.entry.assessmentName.trim()||Object.keys(input.entry).some(k=>!['enrollmentId','assessmentName'].includes(k))))fail('entry enrollment and assessment name required');
   const expectedLater=input.laterEffectiveDate===undefined?undefined:instant(input.laterEffectiveDate);
-  delete input.laterEffectiveDate; // Evidence is separate from durable mutation intent.
+  const expectedHistorical=input.historicalEffectiveDate===undefined?undefined:instant(input.historicalEffectiveDate);
+  if(expectedHistorical&&(!expectedLater||expectedHistorical>input.effectiveDate))fail('invalid historical DOB evidence');
+  // Evidence is separate from durable mutation intent, including keys already used by 0.15.1.
+  delete input.laterEffectiveDate;
+  delete input.historicalEffectiveDate;
   const scope=JSON.stringify([tenantScope,'client-profile',input.clientId]),keyHash=hash('dob:'+input.key),intentHash=hash(input);
   return store.withLock(scope,async()=>{
    const records=await store.read(scope);if(!Array.isArray(records))fail('invalid journal');
@@ -102,9 +118,16 @@ export function createDateOfBirth({api,ui,store}){
    if(expectedLater&&record&&record.method!=='historical-read')throw conflict('existing DOB write requires reconciliation');
    if(record?.method==='historical-read'||expectedLater||!record&&current.effectiveDate>input.effectiveDate){
     if(expectedLater&&record&&expectedLater!==record.laterEffectiveDate)throw conflict('later DOB revision changed');
-    await checkHistory(input,current,record?.laterEffectiveDate??expectedLater);
-    record={method:'historical-read',laterEffectiveDate:current.effectiveDate};await persist('verified');
-    return {clientId:input.clientId,dateOfBirth:input.dateOfBirth,effectiveDate:input.effectiveDate,method:record.method,laterEffectiveDate:record.laterEffectiveDate,outcome:wasVerified?'already-present':'verified'};
+    if(record?.questionId!==undefined&&record.questionId!==current.questionId)throw unavailable();
+    const recordedHistorical=record&&(record.historicalEffectiveDate??input.effectiveDate);
+    if(expectedHistorical&&record&&expectedHistorical!==recordedHistorical)throw conflict('historical DOB revision changed');
+    const historicalEffectiveDate=await checkHistory(input,current,{
+     expectedLater:record?.laterEffectiveDate??expectedLater,
+     expectedHistorical:recordedHistorical??expectedHistorical??(expectedLater?input.effectiveDate:undefined),
+     allowEarlier:Boolean(input.entry)||Boolean(expectedHistorical),
+    });
+    record={method:'historical-read',laterEffectiveDate:current.effectiveDate,historicalEffectiveDate,questionId:current.questionId};await persist('verified');
+    return {clientId:input.clientId,dateOfBirth:input.dateOfBirth,effectiveDate:input.effectiveDate,method:record.method,laterEffectiveDate:record.laterEffectiveDate,historicalEffectiveDate,outcome:wasVerified?'already-present':'verified'};
    }
    if(!record){
     const method=current.effectiveDate===input.effectiveDate?'ui':'rest';
@@ -146,18 +169,26 @@ export function createDateOfBirth({api,ui,store}){
   const wanted=validateBirthDate(input.dateOfBirth),at=instant(input.effectiveDate);
   if(wanted>at.slice(0,10))fail('birth date follows effective date');
   const current=await inspectEvidence({clientId:input.clientId,assessmentCode:input.assessmentCode});
-  if(current.effectiveDate>at)await checkHistory({...input,effectiveDate:at},current);
-  else if(current.effectiveDate===at){if(current.dateOfBirth!==wanted&&!input.allowEntryCorrection)fail('existing effective timestamp requires matching entry context');}
+  if(current.effectiveDate>at){
+   const historicalEffectiveDate=await checkHistory({...input,effectiveDate:at},current,{allowEarlier:input.allowEntryCorrection});
+   return {...snapshot(input.clientId,current),historicalEffectiveDate};
+  }
+  if(current.effectiveDate===at){if(current.dateOfBirth!==wanted&&!input.allowEntryCorrection)fail('existing effective timestamp requires matching entry context');}
   else await ui.validateRestDate(wanted);
   return snapshot(input.clientId,current);
  };
  const verify=async input=>{
-  if(!input||Object.keys(input).some(k=>!['clientId','assessmentCode','dateOfBirth','effectiveDate','allowLater','laterEffectiveDate'].includes(k))||input.allowLater!==undefined&&typeof input.allowLater!=='boolean')fail('invalid DOB verification input');
+  if(!input||Object.keys(input).some(k=>!['clientId','assessmentCode','dateOfBirth','effectiveDate','allowLater','laterEffectiveDate','historicalEffectiveDate'].includes(k))||input.allowLater!==undefined&&typeof input.allowLater!=='boolean')fail('invalid DOB verification input');
   const wanted=validateBirthDate(input.dateOfBirth),at=instant(input.effectiveDate),current=await inspectEvidence({clientId:input.clientId,assessmentCode:input.assessmentCode});
   if(input.laterEffectiveDate!==undefined){
-   await checkHistory({...input,effectiveDate:at},current,instant(input.laterEffectiveDate));
+   await checkHistory({...input,effectiveDate:at},current,{
+    expectedLater:instant(input.laterEffectiveDate),
+    expectedHistorical:input.historicalEffectiveDate===undefined?at:instant(input.historicalEffectiveDate),
+    allowEarlier:input.historicalEffectiveDate!==undefined,
+   });
    return {clientId:input.clientId,dateOfBirth:wanted,effectiveDate:at};
   }
+  if(input.historicalEffectiveDate!==undefined)fail('later revision required for historical verification');
   if(current.dateOfBirth!==wanted||current.effectiveDate===null||(input.allowLater?Date.parse(current.effectiveDate)<Date.parse(at):current.effectiveDate!==at))fail('saved birth date changed or effective timestamp does not match');
   return snapshot(input.clientId,current);
  };

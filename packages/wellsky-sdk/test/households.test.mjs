@@ -91,3 +91,29 @@ test('a prior household with a clearly ended membership does not hide the sole e
  Object.assign(former.clients[1],{dateLeft:'2026-09-01T00:00:00Z',isActive:false});f.rows.unshift(former);
  assert.equal((await f.reuse()).household.householdId,99);assert.equal(f.calls.length,0);
 });
+
+test('a proven different head does not block the sole eligible household',async()=>{
+ const f=reuseFixture(),other=structuredClone(f.rows[0]);other.householdId=100;
+ for(const row of other.clients){
+  row.headofhouseholdStatus=row.clientId===2;
+  row.headofhouseholdRelationship=row.clientId===2?'Self':'Other relative';
+ }
+ // The other head covers the full known membership history on this candidate.
+ other.clients=other.clients.filter(row=>!row.dateLeft);
+ other.clients.find(row=>row.clientId===2).dateJoined='2026-01-01T00:00:00Z';
+ f.rows.unshift(other);
+ const detailReads=[],get=f.api.households.get;
+ f.api.households.get=async args=>{detailReads.push(args.path.householdId);return get(args);};
+ assert.equal((await f.reuse()).household.householdId,99);
+ assert.equal((await f.reuse()).outcome,'already-present');
+ assert.deepEqual(detailReads,[99,99]);
+ assert.equal(f.calls.length,0);
+ // If that candidate's head evidence becomes contradictory or incomplete, require staff review.
+ const head=other.clients.find(row=>row.clientId===2),member=other.clients.find(row=>row.clientId===1);
+ member.headofhouseholdStatus=true;member.headofhouseholdRelationship='Self';
+ await assert.rejects(f.reuse(),{code:'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'});
+ member.headofhouseholdStatus=false;member.headofhouseholdRelationship='Other relative';
+ head.dateJoined='2026-10-21T16:00:00Z';
+ await assert.rejects(f.reuse(),{code:'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'});
+ assert.equal(f.calls.length,0);
+});

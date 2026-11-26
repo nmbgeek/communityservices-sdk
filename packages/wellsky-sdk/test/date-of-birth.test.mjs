@@ -106,3 +106,50 @@ test('historical DOB distinguishes read failure, malformed evidence, a conflicti
  await assert.rejects(f.helper().update(i),e=>e.code==='DOB_HISTORY_EVIDENCE_UNAVAILABLE'&&e.status===503);
  assert.equal(f.entries.size,0);assert.deepEqual(f.counts(),{writes:0,uiWrites:0});
 });
+
+function earlierBirth() {
+ const f=fixture(),at='2026-10-23T17:00:00Z',prior='2026-10-23T16:00:00',dob='1980-07-04';
+ const i=input({entry,dateOfBirth:dob,effectiveDate:at});
+ const latest={client_id:1,question_id:99,virt_field_name:'SVPPROFDOB',question_type:'date',answer_value:'',date_effective:'2026-10-23T18:00:00'};
+ const dated={...latest,answer_value:dob+' 00:00:00-07',date_effective:prior};let rows=[dated];
+ f.api.assessmentsMobile.getAnswers=async()=>[latest];
+ f.api.assessments={get:async({path,query})=>{
+  assert.deepEqual(path,{clientId:1,assessmentCode:'ENTRY'});assert.equal(query.dateEffective,new Date(at).toISOString());return rows;
+ }};
+ const validate=()=>f.helper().validate({clientId:1,assessmentCode:'ENTRY',dateOfBirth:dob,effectiveDate:at,allowEntryCorrection:true});
+ const update=()=>f.helper().update(i);
+ return {...f,i,latest,dated,prior,validate,update,setRows:value=>{rows=value;}};
+}
+test('a matching DOB already in effect verifies both revisions despite a blank mobile projection',async()=>{
+ const f=earlierBirth(),historicalEffectiveDate=f.prior+'.000Z';
+ assert.equal((await f.validate()).historicalEffectiveDate,historicalEffectiveDate);
+ const verified=await f.update();
+ assert.deepEqual(verified,{clientId:1,dateOfBirth:f.i.dateOfBirth,effectiveDate:new Date(f.i.effectiveDate).toISOString(),
+  historicalEffectiveDate,laterEffectiveDate:'2026-10-23T18:00:00.000Z',method:'historical-read',outcome:'verified'});
+ assert.equal((await f.update()).outcome,'already-present');
+ f.dated.date_effective='2026-10-23T16:30:00';
+ await assert.rejects(f.update(),{code:'DOB_HISTORY_CONFLICT'});
+ f.dated.date_effective=f.prior;f.latest.date_effective='2026-10-23T19:00:00';
+ await assert.rejects(f.update(),{code:'DOB_HISTORY_CONFLICT'});
+ f.latest.date_effective='2026-10-23T18:00:00';f.latest.question_id=f.dated.question_id=100;
+ await assert.rejects(f.update(),{code:'DOB_HISTORY_EVIDENCE_UNAVAILABLE'});
+ assert.deepEqual(f.counts(),{writes:0,uiWrites:0});
+});
+test('earlier DOB history requires client and question evidence and a single valid answer at entry',async()=>{
+ for(const [changes,code] of [
+  [{client_id:2},'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [{question_id:101},'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [{question_id:undefined},'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [{date_effective:'2026-10-23T17:00:01'},'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [{answer_value:'1970-07-04 00:00:00-07'},'DOB_HISTORY_CONFLICT'],
+  [{answer_value:null,date_effective:null},'DOB_HISTORICAL_BACKFILL_UNSUPPORTED'],
+ ]){
+  const f=earlierBirth();Object.assign(f.dated,changes);
+  await assert.rejects(f.validate(),{code});await assert.rejects(f.update(),{code});
+  assert.equal(f.entries.size,0);assert.deepEqual(f.counts(),{writes:0,uiWrites:0});
+ }
+ const f=earlierBirth();f.setRows([f.dated,f.dated]);
+ await assert.rejects(f.update(),{code:'DOB_HISTORY_EVIDENCE_UNAVAILABLE'});
+ f.setRows([f.dated]);f.latest.client_id=2;
+ await assert.rejects(f.update(),{code:'DOB_HISTORY_EVIDENCE_UNAVAILABLE'});
+});

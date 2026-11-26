@@ -71,7 +71,7 @@ See [shelter contracts](../browser/shelters.d.mts), [shelter workflow](shelters.
 
 ## Entry / Exit deletion
 
-`createExitDeletion`, `createExitDeletionUi`, and `ExitDeletionError` support reopening all members linked to the selected exit. See the [exit deletion contract](enrollments.md#delete-an-exit-and-reopen-enrollments) and [declarations](../browser/exit-deletion.d.mts).
+`createExitDeletion`, `createExitDeletionUi`, and `ExitDeletionError` support previewing an exit subgroup and reopening its linked enrollments with optional staff-confirmed date and membership checks. See the [exit deletion contract](enrollments.md#delete-an-exit-and-reopen-enrollments) and [declarations](../browser/exit-deletion.d.mts).
 
 `createEnrollmentDeletion`, `createEnrollmentDeletionUi`, and `EnrollmentDeletionError`: [deletion contract](enrollments.md#delete-an-entry--exit), [declarations](../browser/enrollment-deletion.d.mts). `deleteEnrollment` confirms the selected record's UI deletion, journals before confirmation, and verifies absence through fresh active enrollment reads.
 

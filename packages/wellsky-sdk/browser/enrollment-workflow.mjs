@@ -311,16 +311,28 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const carriesBirthDate=plan.carry.includes('SVPPROFDOB'),hasBirthDate=plan.dateOfBirth!==undefined||carriesBirthDate;
    let carriedBirthDate;
    let historicalDobAt=record?.historicalDobAt??internal.historicalDobAt;
+   let historicalDobFrom=record?.historicalDobFrom??internal.historicalDobFrom;
+   const historicalDobEvidence=()=>({
+    ...(historicalDobAt?{laterEffectiveDate:historicalDobAt}:{}),
+    ...(historicalDobFrom?{historicalEffectiveDate:historicalDobFrom}:{}),
+   });
    const dobContext={clientId:input.clientId,assessmentCode:code};
-   const verifyKnownBirthDate=step=>birthDates.verify({...dobContext,dateOfBirth:step.value.dateOfBirth,effectiveDate:step.value.effectiveDate,allowLater:true,...(step.laterEffectiveDate?{laterEffectiveDate:step.laterEffectiveDate}:{})});
+   const verifyKnownBirthDate=step=>birthDates.verify({
+    ...dobContext,dateOfBirth:step.value.dateOfBirth,effectiveDate:step.value.effectiveDate,allowLater:true,
+    ...(step.laterEffectiveDate?{laterEffectiveDate:step.laterEffectiveDate}:{}),
+    ...(step.historicalEffectiveDate?{historicalEffectiveDate:step.historicalEffectiveDate}:{}),
+   });
    if(hasBirthDate){
     if(!birthDates||['update','read','validate','verify'].some(method=>typeof birthDates[method]!=='function'))fail('DOB helper required for birth-date answers and carry-forward');
     if(record?.steps.birthDate?.state==='verified')carriedBirthDate=await verifyKnownBirthDate(record.steps.birthDate);
     else if(plan.dateOfBirth!==undefined){
-     if(historicalDobAt)await birthDates.verify({...dobContext,dateOfBirth:plan.dateOfBirth,effectiveDate:at,laterEffectiveDate:historicalDobAt});
+     if(historicalDobAt)await birthDates.verify({...dobContext,dateOfBirth:plan.dateOfBirth,effectiveDate:at,...historicalDobEvidence()});
      else{
       const checked=await birthDates.validate({...dobContext,dateOfBirth:plan.dateOfBirth,effectiveDate:at,allowEntryCorrection:kind==='entry'});
-      if(checked?.effectiveDate&&restDate(checked.effectiveDate)>restDate(at))historicalDobAt=checked.effectiveDate;
+      if(checked?.effectiveDate&&restDate(checked.effectiveDate)>restDate(at)){
+       historicalDobAt=checked.effectiveDate;
+       if(checked.historicalEffectiveDate&&restDate(checked.historicalEffectiveDate)<restDate(at))historicalDobFrom=checked.historicalEffectiveDate;
+      }
      }
     }
     else{
@@ -407,10 +419,11 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     if(!observed.found&&!record?.steps.exit)await exitUi.validateExit(exitInput);
    }
    if(internal.preflight)requireCurrent();
-   if(internal.preflight)return {assessmentCode:code,...(historicalDobAt?{historicalDobAt}:{}),...(discovered.schemaRevision?{schemaRevision:discovered.schemaRevision}:{}),...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
+   if(internal.preflight)return {assessmentCode:code,...(historicalDobAt?{historicalDobAt}:{}),...(historicalDobFrom?{historicalDobFrom}:{}),...(discovered.schemaRevision?{schemaRevision:discovered.schemaRevision}:{}),...(internal.pinSchema?{schemaHash}:{}),...(exitSchemaHash?{exitSchemaHash}:{})};
    const wasVerified=record?.stage==='verified';
    if(record&&historicalDobAt)record.historicalDobAt=historicalDobAt;
-   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(historicalDobAt?{historicalDobAt}:{}),...(legacyEntrySchemaHash?{legacyEntrySchemaHash}:{}),...(currentForms.schemaRevision?{formSnapshot:currentForms}:{}),...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
+   if(record&&historicalDobFrom)record.historicalDobFrom=historicalDobFrom;
+   if(!record){record={version:1,key:input.key,kind,intentHash,schemaHash,...(historicalDobAt?{historicalDobAt}:{}),...(historicalDobFrom?{historicalDobFrom}:{}),...(legacyEntrySchemaHash?{legacyEntrySchemaHash}:{}),...(currentForms.schemaRevision?{formSnapshot:currentForms}:{}),...(exitSchemaHash?{exitSchemaHash}:{}),context:{clientId:input.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate},assessmentCode:code,...(plan.race?{raceWrites:'standard'}:{}),...(yesNoWrites==='standard'?{yesNoWrites}:{}),stage:'pending',steps:{},rows:{},ends:plan.ends};records.push(record);}
    const persist=()=>store.write(scope(input.clientId),structuredClone(records));await persist();
    const step=async(name,inspect,submit)=>{
     let result=await inspect();const previous=record.steps[name];
@@ -518,10 +531,11 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
     if(record.steps.birthDate?.state==='verified'){
      result=await verifyKnownBirthDate(record.steps.birthDate);
     }else if(plan.dateOfBirth!==undefined){
-     requireCurrent();operation.attempted=true;result=await birthDates.update({...dobContext,key:'enrollment-dob:'+hash({key:input.key,kind,clientId:input.clientId}),dateOfBirth:plan.dateOfBirth,effectiveDate:at,...(historicalDobAt?{laterEffectiveDate:historicalDobAt}:{}),...(kind==='entry'?{entry:{enrollmentId:record.enrollmentId,assessmentName:discovered.entry.assessment.name}}:{})});
+     requireCurrent();operation.attempted=true;result=await birthDates.update({...dobContext,key:'enrollment-dob:'+hash({key:input.key,kind,clientId:input.clientId}),dateOfBirth:plan.dateOfBirth,effectiveDate:at,...historicalDobEvidence(),...(kind==='entry'?{entry:{enrollmentId:record.enrollmentId,assessmentName:discovered.entry.assessment.name}}:{})});
     }else result=await birthDates.verify({...dobContext,dateOfBirth:carriedBirthDate.dateOfBirth,effectiveDate:carriedBirthDate.effectiveDate,allowLater:true});
     const laterEffectiveDate=result.laterEffectiveDate??record.steps.birthDate?.laterEffectiveDate;
-    record.steps.birthDate={state:'verified',...(laterEffectiveDate?{laterEffectiveDate}:{}),value:{clientId:input.clientId,dateOfBirth:result.dateOfBirth,effectiveDate:result.effectiveDate}};await persist();
+    const historicalEffectiveDate=result.historicalEffectiveDate??record.steps.birthDate?.historicalEffectiveDate;
+    record.steps.birthDate={state:'verified',...(laterEffectiveDate?{laterEffectiveDate}:{}),...(historicalEffectiveDate?{historicalEffectiveDate}:{}),value:{clientId:input.clientId,dateOfBirth:result.dateOfBirth,effectiveDate:result.effectiveDate}};await persist();
    }
    record.stage='verified';await persist();
    return {key:input.key,outcome:wasVerified?'already-present':'verified',...(record.legacyEntrySchemaHash?{legacyEntrySchemaVerified:true}:{}),clientId:input.clientId,enrollmentId:record.enrollmentId,...(record.reviewId?{reviewId:record.reviewId}:{}),...(record.projectExitDate?{projectExitDate:record.projectExitDate,exitSubgroupId:record.exitSubgroupId}:{}),assessmentCode:code,recordsetIds:structuredClone(record.rows),effectiveDate:at,...(record.steps.birthDate?{birthDate:structuredClone(record.steps.birthDate.value)}:{})};
@@ -743,12 +757,13 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const toMember=m=>['entry','addition'].includes(kind)?{key:memberKey(input.key,m.clientId),clientId:m.clientId,providerId:context.providerId,type:context.type,entryDate:context.entryDate,assessment:m.assessment}:{key:memberKey(input.key,m.clientId),enrollmentKey:memberKey(catalog[m.clientId].entryKey,m.clientId),clientId:m.clientId,...(kind==='exit'?{exitDate:input.exitDate}:{reviewDate:input.reviewDate}),assessment:m.assessment};
    // Validate every member before any record mutation. The same client locks cover
    // preflight and execution, including overlaps with the single-client workflow.
-   const memberEvidence=clientId=>({expectedRevision:record?.memberRevisions?.[clientId],historicalDobAt:record?.memberDobHistory?.[clientId]});
+   const memberEvidence=clientId=>({expectedRevision:record?.memberRevisions?.[clientId],historicalDobAt:record?.memberDobHistory?.[clientId],historicalDobFrom:record?.memberDobFrom?.[clientId]});
    const preflight=[];
    for(const member of input.members){
     preflight.push(await run(kind==='addition'?'entry':kind,toMember(member),{locked:true,owner,operation,headClientId:input.headClientId,preflight:true,...memberEvidence(member.clientId),...(kind==='addition'?{pinSchema:true}:{})}));
    }
    const memberDobHistory=Object.fromEntries(input.members.flatMap((member,i)=>preflight[i].historicalDobAt?[[member.clientId,preflight[i].historicalDobAt]]:[]));
+   const memberDobFrom=Object.fromEntries(input.members.flatMap((member,i)=>preflight[i].historicalDobFrom?[[member.clientId,preflight[i].historicalDobFrom]]:[]));
    const memberRevisions=Object.fromEntries(input.members.flatMap((member,i)=>preflight[i].schemaRevision?[[member.clientId,preflight[i].schemaRevision]]:[]));
    if(kind==='addition'&&record?.entrySchemas&&canonical(record.entrySchemas)!==canonical(preflight))fail('additional member assessment configuration changed');
    if(kind==='exit'&&record?.exitSchemas&&canonical(record.exitSchemas)!==canonical(preflight))fail('exit assessment configuration changed');
@@ -756,6 +771,7 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const wasVerified=record?.stage==='verified';
    if(!record){record={version:1,key:input.key,kind,intentHash,context,...(input.enrollmentKey?{enrollmentKey:input.enrollmentKey}:{}),clientIds:ids,stage:'pending',members:{},...(Object.keys(memberRevisions).length?{memberRevisions}:{}),...(kind==='exit'?{exitSchemas:preflight}:kind==='addition'?{entrySchemas:preflight}:{})};records.push(record);}
    if(Object.keys(memberDobHistory).length)record.memberDobHistory=memberDobHistory;
+   if(Object.keys(memberDobFrom).length)record.memberDobFrom=memberDobFrom;
    const persist=()=>store.write(householdScope(input.headClientId),structuredClone(records));await persist();
    for(const clientId of cohortIds)await store.withLock(reservationScope(clientId),()=>store.write(reservationScope(clientId),[{owner,stage:'pending'}]));
    const writeAttempted=async()=>{

@@ -44,7 +44,7 @@ function fixture() {
     read: async () => structuredClone(journal),
     write: async (_, records) => { journal = structuredClone(records); },
   };
-  return Object.assign(f, {helper: () => createExitDeletion({ui, store}), count: () => confirms});
+  return Object.assign(f, {helper: () => createExitDeletion({ui, store}), count: () => confirms, journal: () => structuredClone(journal)});
 }
 
 test('reopens the entire linked exit and preserves a separate exit from the same household', async () => {
@@ -83,6 +83,61 @@ test('incomplete subgroup or mismatched provider cannot confirm', async () => {
   f.exits[0].enrollmentIds.push(99);
   await assert.rejects(f.helper().deleteExit(input), {reason: 'incomplete-exit-subgroup'});
   assert.equal(f.count(), 0);
+});
+
+const target = {clientId: input.clientId, enrollmentId: input.enrollmentId, providerId: input.providerId};
+
+test('exit preview reads the selected subgroup and identifies a separate same-day exit', async () => {
+  const f = fixture();
+  const helper = f.helper();
+  assert.deepEqual(await helper.previewExit(target), {
+    exitDate: '2026-02-02T00:00:00.000Z', linkedEnrollmentIds: [50, 51], separatelyExitedEnrollmentIds: [52],
+  });
+  await assert.rejects(helper.previewExit({...target, providerId: 3}), {reason: 'provider-mismatch'});
+  f.exits[0].enrollmentIds.push(52);
+  await assert.rejects(helper.previewExit(target), {reason: 'incomplete-exit-subgroup'});
+  assert.equal(f.count(), 0);
+  assert.deepEqual(f.journal(), []);
+});
+
+test('confirmed date and membership prevent stale exit deletion', async () => {
+  for (const mode of ['date', 'members']) {
+    const f = fixture();
+    const helper = f.helper();
+    const preview = await helper.previewExit(target);
+    if (mode === 'date') {
+      for (const exit of f.exits.slice(0, 2)) exit.projectExitDate = '2026-02-03T00:00:00Z';
+    } else {
+      for (const exit of f.exits.slice(0, 2)) {
+        Object.assign(exit, {exitSubgroupId: 'own-' + exit.enrollmentId, enrollmentIds: [exit.enrollmentId], clientIds: [exit.clientId]});
+      }
+    }
+    await assert.rejects(helper.deleteExit({...input, expectedExitDate: preview.exitDate,
+      expectedEnrollmentIds: preview.linkedEnrollmentIds}), {reason: mode === 'date' ? 'exit-date-changed' : 'exit-members-changed'});
+    assert.equal(f.count(), 0);
+    assert.deepEqual(f.journal(), []);
+  }
+});
+
+test('same-key exit recovery retains staff confirmation and never confirms twice', async () => {
+  const f = fixture();
+  const helper = f.helper();
+  const preview = await helper.previewExit(target);
+  const confirmed = {...input, expectedExitDate: preview.exitDate, expectedEnrollmentIds: preview.linkedEnrollmentIds};
+  const separate = structuredClone(f.exits[2]);
+  f.loseResponse = f.unavailable = true;
+  await assert.rejects(helper.deleteExit(confirmed), /read unavailable/);
+  f.unavailable = false;
+  await assert.rejects(helper.deleteExit({...input, expectedEnrollmentIds: [50]}), {reason: 'intent-changed'});
+  const result = await helper.deleteExit({...confirmed, expectedExitDate: '2026-02-01T19:00:00-05:00', expectedEnrollmentIds: [51, 50]});
+  assert.equal(result.outcome, 'reconciled');
+  assert.deepEqual(result.reopenedEnrollmentIds, [50, 51]);
+  assert.deepEqual(f.exits[2], separate);
+  assert.deepEqual(await helper.previewExit(target), {
+    exitDate: null, linkedEnrollmentIds: [], separatelyExitedEnrollmentIds: [52],
+  });
+  await assert.rejects(helper.deleteExit({...confirmed, key: 'new-key'}), {reason: 'exit-date-changed'});
+  assert.equal(f.count(), 1);
 });
 
 test('UI scopes the trash to Edit Exit and journals before clicking Yes', {skip: !process.env.WELLSKY_TEST_CHROME}, async () => {

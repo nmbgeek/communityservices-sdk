@@ -1194,3 +1194,17 @@ test('a later DOB removed after preflight never turns historical verification in
  for(let n=0;n<2;n++)await assert.rejects(f.workflow().createEnrollment(input),e=>e.code==='DOB_HISTORY_EVIDENCE_UNAVAILABLE'&&e.committed==='unknown');
  assert.equal(f.birthWrites(),0);assert.equal(f.counts.enrollment,1);
 });
+
+test('individual entry verifies the matching earlier DOB and pins its revision across retries',async()=>{
+ const f=birthFixture({blankMobileDob:true}),input=birthEntry();
+ const earlier={field:'SVPPROFDOB',value:'1984-02-29 00:00:00-07',date:'2026-10-17T16:00:00Z'};
+ f.history.push(earlier,{...earlier,date:reviewDate});
+ const read=f.api.assessments.get;
+ f.api.assessments.get=async args=>(await read(args)).map(row=>row.virt_field_name==='SVPPROFDOB'?{...row,question_id:9,client_id:1}:row);
+ const run=()=>f.workflow().createEnrollment(input);
+ assert.equal((await run()).birthDate.effectiveDate,new Date(entryDate).toISOString());
+ assert.equal((await run()).outcome,'already-present');
+ earlier.date='2026-10-18T16:00:00Z';
+ await assert.rejects(run(),{code:'DOB_HISTORY_CONFLICT'});
+ assert.equal(f.counts.enrollment,1);assert.equal(f.birthWrites(),0);
+});

@@ -2,11 +2,23 @@ import type {Page} from 'playwright-core';
 import type {UiConnection} from './connection.mjs';
 import type {PlaywrightEnrollmentSnapshot, UiMutationStore} from './index.mjs';
 
-export interface ExitDeletionInput {
-  key: string;
+export interface ExitDeletionTarget {
   clientId: number;
   enrollmentId: number;
   providerId: number;
+}
+export interface ExitDeletionInput extends ExitDeletionTarget {
+  key: string;
+  /** Timezone-qualified exit instant the caller confirmed. */
+  expectedExitDate?: string;
+  /** Complete set of linked enrollment IDs the caller confirmed, including the target. */
+  expectedEnrollmentIds?: readonly number[];
+}
+export interface ExitDeletionPreview {
+  /** UTC timestamp, or null when the target is already open. */
+  exitDate: string | null;
+  linkedEnrollmentIds: number[];
+  separatelyExitedEnrollmentIds: number[];
 }
 export interface ExitDeletionResult {
   key: string;
@@ -29,5 +41,6 @@ export class ExitDeletionError extends Error {
 }
 export function createExitDeletionUi(options: {page: Page}): ExitDeletionUi;
 export function createExitDeletion(options: {ui: ExitDeletionUi; store: UiMutationStore}): {
+  previewExit(target: ExitDeletionTarget): Promise<ExitDeletionPreview>;
   deleteExit(input: ExitDeletionInput): Promise<ExitDeletionResult>;
 };

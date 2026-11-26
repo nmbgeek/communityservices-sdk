@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.2 - 2026-11-26
+
+- Exclude a household with a verified different head during containing-household selection (#20).
+- Preview exit subgroups and check staff-confirmed exit dates and enrollment IDs before deletion (#22).
+- Verify a matching DOB already in effect at a backdated entry and recheck both stored revisions on retry (#23).
+
 ## 0.15.1 - 2026-11-26
 
 - Document the observed Client Record alias validation on Sex-only saves (#18).

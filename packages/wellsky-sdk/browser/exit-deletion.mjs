@@ -17,12 +17,36 @@ const positive = value => Number.isSafeInteger(value) && value > 0;
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fields = ['projectExitDate', 'destination', 'destinationCode', 'reasonForLeaving', 'reasonForLeavingCode', 'exitSubgroupId'];
 
+const targetFields = ['clientId', 'enrollmentId', 'providerId'];
+
+function normalizeTarget(input, allowedFields = targetFields) {
+  if (!input || Object.keys(input).some(key => !allowedFields.includes(key)) ||
+      targetFields.some(field => !positive(input[field]))) fail('invalid-input');
+  return {clientId: input.clientId, enrollmentId: input.enrollmentId, providerId: input.providerId};
+}
+
 function normalize(input) {
-  if (!input || Object.keys(input).some(key => !['key', 'clientId', 'enrollmentId', 'providerId'].includes(key)) ||
-      typeof input.key !== 'string' || !input.key.trim() || input.key.length > 200 ||
-      /[\x00-\x1f]/.test(input.key) || !positive(input.clientId) || !positive(input.enrollmentId) ||
-      !positive(input.providerId)) fail('invalid-input');
-  return {key: input.key, clientId: input.clientId, enrollmentId: input.enrollmentId, providerId: input.providerId};
+  const target = normalizeTarget(input, [...targetFields, 'key', 'expectedExitDate', 'expectedEnrollmentIds']);
+  if (typeof input.key !== 'string' || !input.key.trim() || input.key.length > 200 ||
+      /[\x00-\x1f]/.test(input.key)) fail('invalid-input');
+  const {expectedExitDate, expectedEnrollmentIds} = input;
+  let expectedDate, expectedIds;
+  if (expectedExitDate !== undefined) {
+    if (typeof expectedExitDate !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(expectedExitDate) ||
+        !Number.isFinite(Date.parse(expectedExitDate)) ||
+        new Date(expectedExitDate.slice(0, 19) + 'Z').toISOString().slice(0, 19) !== expectedExitDate.slice(0, 19)) fail('invalid-input');
+    expectedDate = new Date(expectedExitDate).toISOString();
+  }
+  if (expectedEnrollmentIds !== undefined) {
+    if (!Array.isArray(expectedEnrollmentIds) || !expectedEnrollmentIds.includes(target.enrollmentId) ||
+        [...expectedEnrollmentIds].some(id => !positive(id)) ||
+        new Set(expectedEnrollmentIds).size !== expectedEnrollmentIds.length) fail('invalid-input');
+    expectedIds = [...expectedEnrollmentIds].sort((a, b) => a - b);
+  }
+  return {key: input.key, ...target,
+    ...(expectedDate === undefined ? {} : {expectedExitDate: expectedDate}),
+    ...(expectedIds === undefined ? {} : {expectedEnrollmentIds: expectedIds})};
 }
 
 function readState(snapshot, input, connection) {
@@ -67,6 +91,17 @@ function linkedExits({exits, target}) {
   return linked;
 }
 
+function describeExit(state) {
+  const linked = linkedExits(state);
+  const exitDate = state.target.projectExitDate;
+  if (exitDate === null && fields.some(field => state.target[field] !== null)) fail('incomplete-open-exit-data');
+  const linkedEnrollmentIds = exitDate === null ? [] : linked.map(exit => exit.enrollmentId);
+  const separatelyExitedEnrollmentIds = state.exits
+    .filter(exit => exit.projectExitDate !== null && !linkedEnrollmentIds.includes(exit.enrollmentId))
+    .map(exit => exit.enrollmentId);
+  return {exitDate: exitDate === null ? null : new Date(exitDate).toISOString(), linkedEnrollmentIds, separatelyExitedEnrollmentIds};
+}
+
 function reopened(exit) {
   return {
     ...exit,
@@ -83,10 +118,21 @@ export function createExitDeletion({ui, store}) {
       !['withLock', 'read', 'write'].every(key => typeof store?.[key] === 'function')) fail('ui-and-store-required');
   // An exit may be selected through any linked member. Share the journal and lock across anchors.
   const scope = JSON.stringify([connection.scope, 'exit-deletion']);
-  return {async deleteExit(raw) {
+  const read = async target => readState(await ui.readEnrollment(target), target, connection);
+  const previewExit = async raw => {
+    const target = normalizeTarget(raw);
+    return ui.withLock(async () => describeExit(await read(target)));
+  };
+  const deleteExit = async raw => {
     const input = normalize(raw);
     const keyHash = hash(input.key);
-    const intentHash = hash([input.clientId, input.enrollmentId, input.providerId]);
+    const intent = [input.clientId, input.enrollmentId, input.providerId];
+    if (input.expectedExitDate !== undefined || input.expectedEnrollmentIds !== undefined) {
+      intent.push(input.expectedExitDate, input.expectedEnrollmentIds);
+    }
+    const intentHash = hash(intent);
+    const {clientId, enrollmentId, providerId} = input;
+    const target = {clientId, enrollmentId, providerId};
     return ui.withLock(() => store.withLock(scope, async () => {
       const entries = await store.read(scope);
       if (!Array.isArray(entries) || entries.some(entry => !entry || entry.version !== 1 ||
@@ -96,7 +142,6 @@ export function createExitDeletion({ui, store}) {
           new Set(entries.map(entry => entry.keyHash)).size !== entries.length) fail('invalid-journal');
       let entry = entries.find(value => value.keyHash === keyHash);
       if (entry && entry.intentHash !== intentHash) fail('intent-changed');
-      const read = async () => readState(await ui.readEnrollment(input), input, connection);
       const verify = async (state, outcome) => {
         if (hash([state.context, state.exits]) !== entry.expected) fail('unresolved-delete');
         if (entry.stage !== 'verified') {
@@ -106,17 +151,19 @@ export function createExitDeletion({ui, store}) {
         return {key: input.key, clientId: input.clientId, enrollmentId: input.enrollmentId,
           reopenedEnrollmentIds: [...entry.enrollmentIds], outcome};
       };
-      const state = await read();
+      const state = await read(target);
       if (entry) return verify(state, entry.stage === 'verified' ? 'already-deleted' : 'reconciled');
-      const linked = linkedExits(state);
+      const preview = describeExit(state);
+      if (input.expectedExitDate !== undefined && input.expectedExitDate !== preview.exitDate) fail('exit-date-changed');
+      if (input.expectedEnrollmentIds !== undefined &&
+          JSON.stringify(input.expectedEnrollmentIds) !== JSON.stringify(preview.linkedEnrollmentIds)) fail('exit-members-changed');
       if (entries.some(value => value.stage === 'attempted' &&
           value.enrollmentIds.some(id => state.exits.some(exit => exit.enrollmentId === id)))) fail('unresolved-delete');
-      if (state.target.projectExitDate === null) {
-        if (fields.some(field => state.target[field] !== null)) fail('incomplete-open-exit-data');
+      if (preview.exitDate === null) {
         return {key: input.key, clientId: input.clientId, enrollmentId: input.enrollmentId,
           reopenedEnrollmentIds: [], outcome: 'already-open'};
       }
-      const enrollmentIds = linked.map(exit => exit.enrollmentId);
+      const enrollmentIds = preview.linkedEnrollmentIds;
       const expected = hash([state.context, state.exits.map(exit => enrollmentIds.includes(exit.enrollmentId) ? reopened(exit) : exit)]);
       let attempted = false;
       let failure;
@@ -132,9 +179,10 @@ export function createExitDeletion({ui, store}) {
         failure = error;
       }
       if (!attempted) throw failure ?? new ExitDeletionError('adapter-did-not-journal');
-      return verify(await read(), failure ? 'reconciled' : 'deleted');
+      return verify(await read(target), failure ? 'reconciled' : 'deleted');
     }));
-  }};
+  };
+  return {previewExit, deleteExit};
 }
 
 // GWT renders the exit trash as a bundled sprite with no ID, label, or title.
