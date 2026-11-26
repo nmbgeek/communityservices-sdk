@@ -6,6 +6,7 @@ export class SessionInterruptedError extends Error {
  constructor(reauthenticated,options={}){
   super(reauthenticated?'Session reauthenticated after an interrupted operation. Retry with the same durable journal and operation key to reconcile; the operation was not replayed.':'Session reauthentication failed after an interrupted operation. Resolve authentication, then reconcile with the same durable journal and operation key.',options);
   this.name='SessionInterruptedError';this.code='SESSION_INTERRUPTED';this.reauthenticated=reauthenticated;
+  if(options.authenticationSignal)this.authenticationSignal=options.authenticationSignal;
   const status=options.cause?.status??options.authenticationStatus;if(Number.isInteger(status)&&status>=100&&status<=599)this.status=status;
   if(options.authenticationStatus!==undefined)this.authenticationStatus=options.authenticationStatus;
   if(typeof options.cause?.step==='string')this.step=options.cause.step;
@@ -22,7 +23,11 @@ export function attachAuthentication(page,reconnect,probe,connection=pageConnect
  page.on('response',response);
  const state={
   get generation(){return generation;},
-  async isExpired(){return expired||await page.locator('[id="formfield-login"]:visible, [id="formfield-password"]:visible').count()>0;},
+  async expirationSignal(){
+   if(expired)return 'tenant-401';
+   if(await page.locator('[id="formfield-login"]:visible, [id="formfield-password"]:visible').count())return 'login-prompt';
+  },
+  async isExpired(){return Boolean(await state.expirationSignal());},
   async reauthenticate(){
    if(closed)throw Error('Session closed');
    // Invalidate all prepared payloads even if authentication subsequently fails.
@@ -33,11 +38,12 @@ export function attachAuthentication(page,reconnect,probe,connection=pageConnect
   async afterFailure(error){
    // Preserve confirmed conflicts even if the session expired independently.
    // The next operation still performs normal authentication preflight.
-   if(error instanceof AttachmentConflictError)throw error;
-   if(!await state.isExpired()&&!await Promise.resolve().then(()=>probe?.()).catch(()=>false))throw error;
+   if(error instanceof AttachmentConflictError||error?.code==='CLIENT_PAGE_NOT_READY'&&['wrong-client','wrong-application'].includes(error.reason))throw error;
+   const authenticationSignal=await state.expirationSignal()??(await Promise.resolve().then(()=>probe?.()).catch(()=>false)?'session-probe':undefined);
+   if(!authenticationSignal)throw error;
    const status=authenticationStatus;
-   try{await state.reauthenticate();}catch(reauthenticationCause){throw new SessionInterruptedError(false,{cause:error,authenticationStatus:status,reauthenticationCause});}
-   throw new SessionInterruptedError(true,{cause:error,authenticationStatus:status});
+   try{await state.reauthenticate();}catch(reauthenticationCause){throw new SessionInterruptedError(false,{cause:error,authenticationSignal,authenticationStatus:status,reauthenticationCause});}
+   throw new SessionInterruptedError(true,{cause:error,authenticationSignal,authenticationStatus:status});
   },
   close(){closed=true;page.off('response',response);},
  };

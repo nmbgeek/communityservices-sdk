@@ -31,9 +31,9 @@ Runtime exports: `AttachmentConflictError`, `CoordinatedEntryEventConflictError`
 
 | Task | Contract | Methods or behavior |
 | --- | --- | --- |
-| Login, session, file journal, uploads and goal case notes | [Browser index](../browser/index.d.mts) | Session lifecycle, `uploadAttachment`, `createCaseNote` with optional source key |
+| Login, session, file journal, uploads and goal case notes | [Browser index](../browser/index.d.mts) | Session lifecycle, attachment readiness and reauthentication signals, `uploadAttachment`, `createCaseNote` with optional source key |
 | Client creation | [Client creation](../browser/client-creation.d.mts) | `create`, `lookup`, `resolveCreated`; no automatic demographic matching |
-| Household management | [Households](../browser/households.d.mts) | `create`, `read`, `addMembers`, `endMembers`, `updateRelationships`; head guards |
+| Household management | [Households](../browser/households.d.mts) | `create`, `read`, `addMembers`, `endMembers`, `updateRelationships`; head guards and date-aware containing household reuse |
 | Client Notes, goals and action steps | [Case plans](../browser/case-plans.d.mts) | Create/update methods, supported value fields and record IDs |
 | Profile fields and Sex | [Client profile](../browser/client-profile.d.mts) | `read`, `update`, opt-in `onDiagnostic` write and verification events |
 | Calendar DOB | [Birth dates](../browser/date-of-birth.d.mts) | `read`, `validate`, `verify`, `update` |

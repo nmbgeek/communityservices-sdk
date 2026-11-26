@@ -1167,3 +1167,30 @@ test('restarted status distinguishes same-date entries and a durable review of a
  assert.equal(verified.stage,'verified');
  assert.equal(verified.durableDiscovery,true);
 });
+
+test('backdated DOB stops before writes, then reconciles a staff correction and rechecks both dates',async()=>{
+ const f=birthFixture(),input=birthEntry();
+ const later={field:'SVPPROFDOB',value:'1984-02-29 00:00:00-07',date:reviewDate};
+ f.history.push(later);
+ const attempt=()=>f.workflow().createEnrollment(input);
+ for(let i=0;i<2;i++)await assert.rejects(attempt(),e=>e.code==='DOB_HISTORICAL_BACKFILL_UNSUPPORTED'&&e.nextAction==='staff-review'&&e.committed===false);
+ assert.equal(f.counts.enrollment,0);assert.equal(f.journal.size,0);
+ const earlier={...later,date:entryDate};f.history.unshift(earlier);
+ assert.equal((await attempt()).birthDate.effectiveDate,new Date(entryDate).toISOString());
+ assert.equal((await attempt()).outcome,'already-present');
+ assert.equal(f.counts.enrollment,1);assert.equal(f.birthWrites(),0);
+ earlier.value='1980-01-01 00:00:00-07';
+ await assert.rejects(attempt(),e=>e.code==='DOB_HISTORY_CONFLICT');
+ earlier.value=later.value;later.date='2026-10-23T16:00:00Z';
+ await assert.rejects(attempt(),e=>e.code==='DOB_HISTORY_CONFLICT');
+ assert.equal(f.counts.enrollment,1);assert.equal(f.birthWrites(),0);
+});
+
+test('a later DOB removed after preflight never turns historical verification into a profile write',async()=>{
+ const f=birthFixture(),input=birthEntry();
+ f.history.push(...[entryDate,reviewDate].map(date=>({field:'SVPPROFDOB',value:'1984-02-29 00:00:00-07',date})));
+ const create=f.api.enrollments.createEntryAssessment;
+ f.api.enrollments.createEntryAssessment=async args=>{const result=await create(args);f.history.splice(1,1);return result;};
+ for(let n=0;n<2;n++)await assert.rejects(f.workflow().createEnrollment(input),e=>e.code==='DOB_HISTORY_EVIDENCE_UNAVAILABLE'&&e.committed==='unknown');
+ assert.equal(f.birthWrites(),0);assert.equal(f.counts.enrollment,1);
+});

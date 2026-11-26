@@ -679,3 +679,29 @@ test('adoption status uses the first group write and can read older member evide
  delete member.formSnapshot;
  assert.equal(Object.hasOwn(await read(),'durableDiscovery'),false);
 });
+
+test('a later matching DOB with blank entry history blocks the entire household on same-key retries',async()=>{
+ const f=householdBirthFixture();
+ f.births.set(2,{dateOfBirth:'1992-07-03',effectiveDate:new Date(reviewDate).toISOString()});
+ const get=f.api.assessments.get;
+ f.api.assessments.get=async args=>{
+  const rows=await get(args),dob=rows.find(q=>q.virt_field_name==='SVPPROFDOB');
+  if(args.path.clientId===2){
+   if(!args.query)dob.answer_value='1992-07-03 00:00:00-07';
+   else if(Date.parse(args.query.dateEffective)<Date.parse(reviewDate))Object.assign(dob,{answer_value:null,date_effective:null});
+  }
+  return rows;
+ };
+ for(let i=0;i<2;i++)await assert.rejects(f.workflow().createHouseholdEnrollment(f.entry),e=>e.code==='DOB_HISTORICAL_BACKFILL_UNSUPPORTED'&&e.committed===false);
+ assert.equal(f.counts.entry,0);assert.equal(f.counts.attach,0);assert.equal(f.writes.size,0);assert.equal(f.journal.size,0);
+});
+test('household entry accepts a rejoined member with disjoint intervals and rejects overlapping history',async()=>{
+ const f=fixture();f.household.householdType='Other';
+ for(const m of f.household.clients)m.headofhouseholdRelationship=m.clientId===1?'Self':'Other relative';
+ const prior={...f.household.clients[1],dateJoined:'2026-01-01T00:00:00Z',dateLeft:entryDate,isActive:false};
+ f.household.clients.push(prior);
+ await assert.rejects(f.workflow().createHouseholdEnrollment(entryInput()),e=>e.code==='HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'&&e.committed===false);
+ assert.equal(f.counts.entry,0);
+ prior.dateLeft='2026-03-01T00:00:00Z';
+ assert.equal((await f.workflow().createHouseholdEnrollment(entryInput())).members.length,2);
+});

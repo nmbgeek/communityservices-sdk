@@ -10,7 +10,7 @@ export interface HouseholdUi {
 export interface HouseholdMutation {key:string;householdId:number;headClientId:number;}
 export interface Households {
  read(householdId:number):Promise<HouseholdSnapshot>;
- create(input:{key:string;headClientId:number;householdType:string;members:HouseholdMemberInput[]}):Promise<HouseholdResult>;
+ create(input:{key:string;headClientId:number;householdType:string;members:HouseholdMemberInput[]},options?:{reuseContainingHousehold?:boolean}):Promise<HouseholdResult>;
  addMembers(input:HouseholdMutation&{householdType?:string;members:HouseholdMemberInput[]}):Promise<HouseholdResult>;
  /** Ends household membership only. The head cannot leave an active household. */
  endMembers(input:HouseholdMutation&{clientIds:number[];dateEnded:string}):Promise<HouseholdResult>;

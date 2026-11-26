@@ -1,12 +1,15 @@
 import {pageConnection} from './connection.mjs';
 import {createHash} from 'node:crypto';
 import {decodeMappedResponse} from './gwt-mapped.mjs';
+import {SessionInterruptedError,sessionAuthentication} from './session-authentication.mjs';
 import {withPageLock} from './page-lock.mjs';
 import {AttachmentConflictError} from './attachment-conflict.mjs';
 import {semanticHash} from '../dist/esm/index.js';
 const id=n=>{if(!Number.isSafeInteger(n)||n<=0)throw Error('Positive integer ID required');return n;};
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const maxBytes=10_000_000;
+const readinessError=reason=>Object.assign(Error('Client page readiness failed: '+reason),{code:'CLIENT_PAGE_NOT_READY',reason,step:'open-client'});
+const loginSelector='[id="formfield-login"]:visible, [id="formfield-password"]:visible';
 // Key-order independent: stores such as Postgres jsonb do not preserve insertion order.
 const sameIntent=async(a,b)=>await semanticHash(a)===await semanticHash(b);
 
@@ -14,24 +17,57 @@ const sameIntent=async(a,b)=>await semanticHash(a)===await semanticHash(b);
  * Own this page exclusively. The store must persist before resolving and survive restarts. */
 export function createClientWorkflows({page,store}) {
  const connection=pageConnection(page),base=connection.moduleBaseUrl;
-    const guard=()=>{const u=new URL(page.url());if(u.origin+u.pathname!==base+'index.html')throw Error('Configured application page required');};
+  const guard=()=>{const u=new URL(page.url());if(u.origin+u.pathname!==base+'index.html')throw readinessError('wrong-application');};
   const ready=()=>page.waitForFunction(()=>!document.body.innerText.includes('Processing...')&&!document.body.innerText.includes('Loading...'),null,{timeout:30000});
   let wire;
   const openClient=async clientId=>{
     id(clientId);guard();
-    if(await page.locator('[role=dialog]:visible').count())throw Error('Close dialogs before client workflow');
+    if(await page.locator(loginSelector).count())throw readinessError('login-prompt');
+    if(await page.locator('[role=dialog]:visible').count())throw readinessError('dialog-open');
     wire=undefined;
-    let pendingHeaders;
-    const listener=request=>{
-      if(request.url()===base+'service/MetaQueryService'&&request.postData()?.includes('|getMappedResults|')){
-        const policy=request.postData().split('|')[4];pendingHeaders=request.allHeaders().then(h=>{wire={policy,headers:Object.fromEntries(['content-type','x-gwt-module-base','x-gwt-permutation'].map(k=>[k,h[k]]))};});
-      }
+    let captured;
+    const listener=async request=>{
+      if(request.url()!==base+'service/MetaQueryService'||!request.postData()?.includes('|getMappedResults|'))return;
+      const policy=request.postData().split('|')[4];
+      try{
+       const h=await request.allHeaders();
+       if(policy&&h['x-gwt-module-base']===base&&h['x-gwt-permutation']&&h['content-type']){
+        captured={policy,headers:Object.fromEntries(['content-type','x-gwt-module-base','x-gwt-permutation'].map(k=>[k,h[k]]))};
+       }
+      }catch{/* A missing capture cannot establish readiness. */}
+    };
+    const reason=async()=>{
+      guard();
+      if(await page.locator(loginSelector).count())return 'login-prompt';
+      if(await sessionAuthentication(page)?.isExpired())return 'session-expired';
+      const visible=await page.locator('body').innerText({timeout:2000});
+      const routeClient=new URL(page.url()).hash.match(/(?:[;#])clientId=(\d+)(?:;|$)/)?.[1];
+      const headings=[...visible.matchAll(/(?:^|\n)\s*Client - \((\d+)\)/g)];
+      if(routeClient&&routeClient!==String(clientId)||headings.some(h=>h[1]!==String(clientId)))return 'wrong-client';
+      if(/Processing\.\.\.|Loading\.\.\./.test(visible))return 'loading';
+      if(!headings.length)return 'missing-client-heading';
+      if(!captured)return 'missing-mapped-request';
     };
     page.on('request',listener);
     try{
-      if(new URL(page.url()).hash!==`#loadClient;clientId=${clientId}`)await page.goto(base+`index.html#loadClient;clientId=${clientId}`);
-      await page.getByRole('tab',{name:'Summary',exact:true}).click();await ready();await page.getByRole('tab',{name:'Client Profile',exact:true}).click();await ready();await pendingHeaders;
-      if(!wire||!new RegExp(`Client - \\(${clientId}\\)`).test(await page.locator('body').innerText())||await page.locator('[id="formfield-password"]:visible').count())throw Error('Client identity unavailable');
+      const hash='#loadClient;clientId='+clientId;
+      if(new URL(page.url()).hash!==hash)await page.goto(base+'index.html'+hash);
+      try{
+       await page.getByRole('tab',{name:'Summary',exact:true}).click({timeout:10000});
+       await ready();
+       await page.getByRole('tab',{name:'Client Profile',exact:true}).click({timeout:10000});
+      }catch{throw readinessError(await reason()??'profile-tab-unavailable');}
+      const deadline=Date.now()+5000;
+      for(;;){
+       const pending=await reason();
+       if(!pending){wire=captured;break;}
+       if(['wrong-client','login-prompt','session-expired'].includes(pending)||Date.now()>=deadline)throw readinessError(pending);
+       await new Promise(resolve=>setTimeout(resolve,75));
+      }
+    }catch(error){
+      if(error?.code==='CLIENT_PAGE_NOT_READY')throw error;
+      guard();
+      throw readinessError(await page.locator(loginSelector).count()?'login-prompt':'page-unavailable');
     }finally{page.off('request',listener);}
   };
   const mapped=async query=>{
@@ -57,36 +93,48 @@ export function createClientWorkflows({page,store}) {
   const downloadAttachment=({clientId,attachmentId})=>withPageLock(page,async()=>{
     await openClient(clientId);if(!(await list(clientId)).some(a=>a.attachmentId===id(attachmentId)))throw Error('Attachment not linked to this client');return download(attachmentId);
   });
-  const uploadAttachment=({clientId,location,file,description=''})=>withPageLock(page,async()=>{
+  const uploadAttachment=async({clientId,location,file,description=''})=>{
     id(clientId);if(!file||typeof file.name!=='string'||!file.name||/[\\/\r\n\0]/.test(file.name)||!(file.buffer instanceof Uint8Array)||!file.buffer.length||file.buffer.length>maxBytes||typeof description!=='string')throw Error('Invalid attachment or size exceeds 10,000,000 bytes');
     const bytes=Buffer.from(file.buffer),checksum=hash(bytes),entityType={profile:'SpClient','case-plans':'CasePlans',goal:'SpGoal'}[location?.kind];
     if(!entityType)throw Error('Unsupported attachment location');const entityId=location.kind==='goal'?id(location.goalId):null;
     const intent={clientId,entityType,entityId,name:file.name,description,checksum};
     const scope=JSON.stringify([base,'attachment',clientId,entityType,entityId,file.name]);
     return store.withLock(scope,async()=>{
-      await openClient(clientId);
-      if(entityId&&!(await mapped(`SELECT g.goalId AS goalId FROM SpGoal AS g WHERE g.active = TRUE AND g.goalId = ${entityId} AND g.clientId = ${clientId}`)).length)throw Error('Goal does not belong to client');
       const records=await store.read(scope);if(!Array.isArray(records)||records.length>1)throw Error('Invalid upload journal');const previous=records[0];
       if(previous&&!(await sameIntent(previous.intent,intent)))throw new AttachmentConflictError('intent-changed','Attachment intent conflicts with prior attempt');
-      const matching=async()=>{
-        const matches=(await list(clientId)).filter(a=>a.entityType===entityType&&(a.entityId??null)===entityId&&a.name===file.name);
-        if(matches.length>1)throw new AttachmentConflictError('duplicate-name','Duplicate attachment names');
-        if(previous?.attachmentId&&matches[0]?.attachmentId!==previous.attachmentId)throw new AttachmentConflictError('identity-changed','Saved attachment identity changed or missing prior attachment; reconcile before retrying');
-        if(matches.length&&(matches[0].description!==description||hash(await download(matches[0].attachmentId))!==checksum))throw new AttachmentConflictError('content-changed','Existing attachment differs');return matches[0];
-      };
-      let found=await matching();if(found){await store.write(scope,[{intent,state:'verified',attachmentId:found.attachmentId}]);return {outcome:previous?'reconciled':'already-present',attachment:found,checksum};}
-      if(previous)throw new AttachmentConflictError('unresolved','Unresolved or missing prior attachment; refusing another upload');
-      await store.write(scope,[{intent,state:'attempted'}]);
-      let response;
-      try{response=await page.evaluate(async({url,clientId,entityType,entityId,name,mimeType,description,data})=>{
-        const form=new FormData();const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));form.set('uploadFormElement',new Blob([bytes],{type:mimeType}),name);form.set('descriptionFormElement',description);form.set('clientId',String(clientId));form.set('entityType',entityType);if(entityId!==null)form.set('entityKey',String(entityId));
-        const r=await fetch(url,{method:'POST',body:form,credentials:'same-origin',redirect:'error',signal:AbortSignal.timeout(30000)});return {status:r.status,body:await r.text()};
-      },{url:base+'/uploadAttachment',clientId,entityType,entityId,name:file.name,mimeType:file.mimeType??'application/octet-stream',description,data:bytes.toString('base64')});}catch{/* Never replay an uncertain upload. */}
-      found=await matching();if(!found)throw Error('Attachment outcome uncertain; journal blocks repeat upload');
-      await store.write(scope,[{intent,state:'verified',attachmentId:found.attachmentId}]);
-      return {outcome:response?.status===200&&response.body===`${found.attachmentId}:SUCCESS`?'written':'reconciled',attachment:found,checksum};
+      let preparing=!previous;
+      const run=()=>withPageLock(page,async()=>{
+        await openClient(clientId);
+        if(entityId&&!(await mapped(`SELECT g.goalId AS goalId FROM SpGoal AS g WHERE g.active = TRUE AND g.goalId = ${entityId} AND g.clientId = ${clientId}`)).length)throw Error('Goal does not belong to client');
+
+        const matching=async()=>{
+          const matches=(await list(clientId)).filter(a=>a.entityType===entityType&&(a.entityId??null)===entityId&&a.name===file.name);
+          if(matches.length>1)throw new AttachmentConflictError('duplicate-name','Duplicate attachment names');
+          if(previous?.attachmentId&&matches[0]?.attachmentId!==previous.attachmentId)throw new AttachmentConflictError('identity-changed','Saved attachment identity changed or missing prior attachment; reconcile before retrying');
+          if(matches.length&&(matches[0].description!==description||hash(await download(matches[0].attachmentId))!==checksum))throw new AttachmentConflictError('content-changed','Existing attachment differs');return matches[0];
+        };
+        let found=await matching();
+        if(await sessionAuthentication(page)?.isExpired())throw readinessError('session-expired');
+        preparing=false;
+        if(found){await store.write(scope,[{intent,state:'verified',attachmentId:found.attachmentId}]);return {outcome:previous?'reconciled':'already-present',attachment:found,checksum};}
+        if(previous)throw new AttachmentConflictError('unresolved','Unresolved or missing prior attachment; refusing another upload');
+        await store.write(scope,[{intent,state:'attempted'}]);
+        let response;
+        try{response=await page.evaluate(async({url,clientId,entityType,entityId,name,mimeType,description,data})=>{
+          const form=new FormData();const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));form.set('uploadFormElement',new Blob([bytes],{type:mimeType}),name);form.set('descriptionFormElement',description);form.set('clientId',String(clientId));form.set('entityType',entityType);if(entityId!==null)form.set('entityKey',String(entityId));
+          const r=await fetch(url,{method:'POST',body:form,credentials:'same-origin',redirect:'error',signal:AbortSignal.timeout(30000)});return {status:r.status,body:await r.text()};
+        },{url:base+'/uploadAttachment',clientId,entityType,entityId,name:file.name,mimeType:file.mimeType??'application/octet-stream',description,data:bytes.toString('base64')});}catch{/* Never replay an uncertain upload. */}
+        found=await matching();if(!found)throw Error('Attachment outcome uncertain; journal blocks repeat upload');
+        await store.write(scope,[{intent,state:'verified',attachmentId:found.attachmentId}]);
+        return {outcome:response?.status===200&&response.body===`${found.attachmentId}:SUCCESS`?'written':'reconciled',attachment:found,checksum};
+      });
+      try{return await run();}catch(error){
+       if(!preparing||!(error instanceof SessionInterruptedError)||!error.reauthenticated)throw error;
+       const result=await run();
+       return {...result,preparationRecovery:{authenticationSignal:error.authenticationSignal,...(error.cause?.code==='CLIENT_PAGE_NOT_READY'?{readinessReason:error.cause.reason}:{})}};
+      }
     });
-  });
+  };
   const notes=(clientId,goalId)=>mapped(`SELECT n.goalCasenoteId AS noteId, n.goalId AS goalId, n.clientId AS clientId, n.noteDate AS noteDate, n.note AS note, n.providerId AS providerId FROM SpGoalCasenote AS n WHERE n.active = TRUE AND n.clientId = ${id(clientId)} AND n.goalId = ${id(goalId)}`);
   const listCaseNotes=({clientId,goalId})=>withPageLock(page,async()=>{await openClient(clientId);return notes(clientId,goalId);});
   const createCaseNote=async({key,clientId,goalId,providerId,noteDate,note})=>{

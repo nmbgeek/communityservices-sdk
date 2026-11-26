@@ -21,7 +21,7 @@ export type DurableRecords = ReturnType<typeof durableRecords>;
 export async function createPeopleAndHousehold(records:DurableRecords, input:{
 	householdSourceId:string;householdType:string;
 	head:ClientCreationInput;member:ClientCreationInput;
-	joinedAt:string;memberRelationship:string;
+	joinedAt:string;memberRelationship:string;reuseContainingHousehold?:boolean;
 }) {
 	const head=await records.clients.create(input.head);
 	const member=await records.clients.create(input.member);
@@ -31,7 +31,7 @@ export async function createPeopleAndHousehold(records:DurableRecords, input:{
 			{clientId:head.clientId,relationship:'Self',dateJoined:input.joinedAt},
 			{clientId:member.clientId,relationship:input.memberRelationship,dateJoined:input.joinedAt},
 		],
-	});
+	},{reuseContainingHousehold:input.reuseContainingHousehold??false});
 	return {head,member,household};
 }
 

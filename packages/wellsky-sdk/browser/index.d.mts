@@ -71,12 +71,14 @@ export class AttachmentConflictError extends Error {
   readonly code:'ATTACHMENT_CONFLICT';
   readonly reason:AttachmentConflictReason;
 }
+export type SessionAuthenticationSignal='tenant-401'|'login-prompt'|'session-probe';
+export type ClientReadinessReason='dialog-open'|'wrong-client'|'wrong-application'|'login-prompt'|'session-expired'|'loading'|'missing-client-heading'|'missing-mapped-request'|'profile-tab-unavailable'|'page-unavailable';
 export interface BrowserCaseNote {noteId:number;goalId:number;clientId:number;noteDate:string;note:string;providerId:number;}
 export interface ClientWorkflows {
  readonly connection?:import("./connection.mjs").UiConnection;
   listAttachments(clientId:number):Promise<BrowserAttachment[]>;
   downloadAttachment(input:{clientId:number;attachmentId:number}):Promise<Uint8Array>;
-  uploadAttachment(input:{clientId:number;location:{kind:'profile'|'case-plans'}|{kind:'goal';goalId:number};file:{name:string;mimeType?:string;buffer:Uint8Array};description?:string}):Promise<{outcome:'written'|'reconciled'|'already-present';attachment:BrowserAttachment;checksum:string}>;
+  uploadAttachment(input:{clientId:number;location:{kind:'profile'|'case-plans'}|{kind:'goal';goalId:number};file:{name:string;mimeType?:string;buffer:Uint8Array};description?:string}):Promise<{outcome:'written'|'reconciled'|'already-present';attachment:BrowserAttachment;checksum:string;preparationRecovery?:{authenticationSignal:SessionAuthenticationSignal;readinessReason?:ClientReadinessReason}}>;
   listCaseNotes(input:{clientId:number;goalId:number}):Promise<BrowserCaseNote[]>;
   createCaseNote(input:{key?:string;clientId:number;goalId:number;providerId:number;noteDate:string;note:string}):Promise<{outcome:'written'|'reconciled'|'already-present';note:BrowserCaseNote}>;
 }
@@ -92,7 +94,7 @@ export * from './household-exit.mjs';
 export * from './enrollment-deletion.mjs';
 export * from './exit-deletion.mjs';
 
-export class SessionInterruptedError extends Error {readonly code:'SESSION_INTERRUPTED';readonly reauthenticated:boolean;readonly status?:number;readonly authenticationStatus?:number;readonly step?:string;readonly reauthenticationCause?:unknown;constructor(reauthenticated:boolean,options?:ErrorOptions&{authenticationStatus?:number;reauthenticationCause?:unknown});}
+export class SessionInterruptedError extends Error {readonly code:'SESSION_INTERRUPTED';readonly authenticationSignal?:SessionAuthenticationSignal;readonly reauthenticated:boolean;readonly status?:number;readonly authenticationStatus?:number;readonly step?:string;readonly reauthenticationCause?:unknown;constructor(reauthenticated:boolean,options?:ErrorOptions&{authenticationSignal?:SessionAuthenticationSignal;authenticationStatus?:number;reauthenticationCause?:unknown});}
 export * from './client-profile.mjs';
 export * from './date-of-birth.mjs';
 export * from './households.mjs';

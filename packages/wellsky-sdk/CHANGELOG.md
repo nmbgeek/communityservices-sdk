@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.1 - 2026-11-26
+
+- Document the observed Client Record alias validation on Sex-only saves (#18).
+- Distinguish blank, conflicting and unavailable historical DOB evidence at backdated entry. Verify staff-corrected entries without overwriting later revisions (#19).
+- Reuse a unique containing household across disjoint membership intervals and verify the selection on retry (#20).
+- Report attachment readiness and reauthentication signals. Repeat read-only preparation once when login recovers before an upload attempt (#21).
+
 ## 0.15.0 - 2026-11-25
 
 - Add the browser SDK's `deleteExit` operation. It inactivates the selected exit, verifies that every linked enrollment reopened, and reconciles uncertain confirmations through the same journal.

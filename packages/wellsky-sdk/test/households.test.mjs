@@ -1,7 +1,7 @@
 const testTenant=process.env.WELLSKY_TEST_TENANT??'tenant-b';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHouseholds} from '../browser/households.mjs';
+import {createHouseholds} from '@choiceapps/communityservices-sdk/browser';
 const date='2026-10-20T16:00:00Z';
 const input=()=>({key:'create',headClientId:1,householdType:'Couple With No Children',members:[{clientId:1,relationship:'Self',dateJoined:date},{clientId:2,relationship:'Other relative',dateJoined:date}]});
 function fixture(){
@@ -47,4 +47,47 @@ test('UI disagreement, incomplete reads, failed storage and missing tenant never
  const f=fixture();f.ui.confirmNoHouseholds=async()=>false;await assert.rejects(f.helper().create(input()));assert.equal(f.calls.length,0);
  const g=fixture();g.store.write=async()=>{throw Error('disk');};await assert.rejects(g.helper().create(input()),/disk/);assert.equal(g.calls.length,0);
  const h=fixture();h.api.households.listForClient=async()=>({count:2,values:[]});await assert.rejects(h.helper().create(input()),/Incomplete/);assert.equal(h.calls.length,0);h.api.tenant='';assert.throws(()=>h.helper(),/tenant/);
+});
+
+function reuseFixture(){
+ const f=fixture(),i=input();
+ const clients=i.members.map(m=>({clientId:m.clientId,dateJoined:'2026-01-01T00:00:00Z',dateLeft:null,isActive:true,headofhouseholdStatus:m.clientId===1,headofhouseholdRelationship:m.relationship}));
+ const old={...clients[1],dateLeft:'2026-03-01T00:00:00Z',isActive:false};clients[1].dateJoined='2026-05-01T00:00:00Z';
+ clients.push(old,{...clients[1],clientId:3});
+ f.rows.push({householdId:99,isActive:true,householdType:i.householdType,clients});
+ return {...f,i,old,clients,reuse:()=>f.helper().create(i,{reuseContainingHousehold:true})};
+}
+test('containing household selection uses disjoint intervals at entry and selection and pins the chosen household',async()=>{
+ const f=reuseFixture();f.i.members[1].dateJoined='2026-02-20T12:00:00Z';f.i.members[0].dateJoined=f.i.members[1].dateJoined;
+ const a=await f.reuse();assert.equal(a.household.householdId,99);assert.equal(a.household.members.length,4);
+ assert.equal((await f.reuse()).outcome,'already-present');
+ f.rows.push({...f.rows[0],householdId:100});
+ await assert.rejects(f.reuse(),e=>e.code==='HOUSEHOLD_MEMBERSHIP_AMBIGUOUS');
+ f.rows.shift();await assert.rejects(f.reuse(),e=>e.code==='HOUSEHOLD_MEMBERSHIP_AMBIGUOUS');
+ assert.equal(f.calls.length,0);
+});
+test('ambiguous intervals, boundaries, selection drift and disagreements never create a household',async()=>{
+ for(const mode of ['overlap','touch','ended','gap','different relationship','other head','changed detail','drift','multiple']){
+  const f=reuseFixture();
+  if(mode==='overlap')f.old.dateLeft=date;
+  if(mode==='touch')f.old.dateLeft=f.clients[1].dateJoined;
+  if(mode==='ended'||mode==='gap')for(const m of f.i.members)m.dateJoined=mode==='ended'?f.old.dateLeft:'2026-04-01T00:00:00Z';
+  if(mode==='different relationship')f.clients[1].headofhouseholdRelationship='Son';
+  if(mode==='other head')Object.assign(f.clients[3],{headofhouseholdStatus:true,headofhouseholdRelationship:'Self'});
+  if(mode==='changed detail'){const get=f.api.households.get;f.api.households.get=async args=>{const h=await get(args);h.clients[1].dateJoined='2026-06-01T00:00:00Z';return h;};}
+  if(mode==='drift'){await f.reuse();f.clients[1].dateJoined='2026-07-01T00:00:00Z';}
+  if(mode==='multiple')f.rows.push({...f.rows[0],householdId:100});
+  await assert.rejects(f.reuse(),e=>e.code==='HOUSEHOLD_MEMBERSHIP_AMBIGUOUS'&&e.nextAction==='staff-review',mode);
+  assert.equal(f.calls.length,0);
+ }
+});
+test('opt-in create with no containing household keeps the original write journal',async()=>{
+ const f=fixture(),i=input(),options={reuseContainingHousehold:true};
+ await f.helper().create(i,options);assert.equal((await f.helper().create(i,options)).outcome,'already-present');assert.equal(f.calls.length,1);
+});
+
+test('a prior household with a clearly ended membership does not hide the sole eligible current household',async()=>{
+ const f=reuseFixture(),former=structuredClone(f.rows[0]);former.householdId=100;
+ Object.assign(former.clients[1],{dateLeft:'2026-09-01T00:00:00Z',isActive:false});f.rows.unshift(former);
+ assert.equal((await f.reuse()).household.householdId,99);assert.equal(f.calls.length,0);
 });

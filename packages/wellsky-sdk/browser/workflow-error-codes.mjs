@@ -1,5 +1,9 @@
 // Stable public codes. Keep code values when changing their associated messages.
 const codes = new Map([
+ ["Date of birth: historical correction requires staff to backfill the unanswered DOB", "DOB_HISTORICAL_BACKFILL_UNSUPPORTED"],
+ ["Date of birth: dated and current DOB disagree", "DOB_HISTORY_CONFLICT"],
+ ["Date of birth: DOB evidence unavailable", "DOB_HISTORY_EVIDENCE_UNAVAILABLE"],
+ ["Ambiguous household membership; staff review required", "HOUSEHOLD_MEMBERSHIP_AMBIGUOUS"],
  ["Race and Ethnicity must use an explicit category or missing-answer state", "UNSUPPORTED_RACE_ETHNICITY_CLEAR"],
  ["legacy race correction requires explicit repair and reconciliation", "RACE_ETHNICITY_REPAIR_REQUIRED"],
  ["future Race and Ethnicity cannot be verified in Summary", "FUTURE_RACE_ETHNICITY_UNSUPPORTED"],

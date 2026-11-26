@@ -156,6 +156,9 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `DESTINATION_AND_REASON_FOR_LEAVING_REQUIRED` | destination and reason for leaving required |
 | `DOB_AND_HOUSEHOLD_HEAD_CORRECTIONS_REQUIRE_THEIR_DEDICATED_WORKFLOWS` | DOB and household head corrections require their dedicated workflows |
 | `DOB_HELPER_REQUIRED_FOR_BIRTH_DATE_ANSWERS_AND_CARRY_FORWARD` | DOB helper required for birth-date answers and carry-forward |
+| `DOB_HISTORICAL_BACKFILL_UNSUPPORTED` | Date of birth: historical correction requires staff to backfill the unanswered DOB |
+| `DOB_HISTORY_CONFLICT` | Date of birth: dated and current DOB disagree |
+| `DOB_HISTORY_EVIDENCE_UNAVAILABLE` | Date of birth: DOB evidence unavailable |
 | `DOB_QUESTION_TYPE_CHANGED` | DOB question type changed |
 | `DUPLICATE_ADOPTION_TARGETS` | duplicate adoption targets |
 | `DUPLICATE_CORRECTION_JOURNAL_KEYS` | duplicate correction journal keys |
@@ -222,6 +225,7 @@ A preflight refusal after enrollment creation can identify `step: "scalars"` whi
 | `HOUSEHOLD_HEAD_MISMATCH_HEAD_CHANGES_ARE_A_RED_FLAG_AND_REQUIRE_SEPARATE_RETROACTIVE` | household head mismatch; head changes are a red flag and require separate retroactive correction or a fresh enrollment |
 | `HOUSEHOLD_KEY_CONFLICTS_WITH_PREVIOUS_INTENT` | household key conflicts with previous intent |
 | `HOUSEHOLD_MEMBERS_UNAVAILABLE` | household members unavailable |
+| `HOUSEHOLD_MEMBERSHIP_AMBIGUOUS` | Ambiguous household membership; staff review required |
 | `HOUSEHOLD_MEMBERSHIP_CHANGED_WHILE_ACQUIRING_LOCKS_RETRY` | household membership changed while acquiring locks; retry |
 | `HOUSEHOLD_NATIVE_LINK_CHANGED` | household native link changed<br>native enrollment household or group changed |
 | `HOUSEHOLD_ORIGINAL_HEAD_AND_COMPLETE_ENROLLMENT_COHORT_REQUIRED` | household, original head and complete enrollment cohort required |

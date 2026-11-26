@@ -27,6 +27,10 @@ Use the same key, input and durable store for retries. The helper verifies fresh
 
 REST changes require a timezone-qualified `dateEffective`; Sex uses the current UI audit context. The two writes are not atomic. DOB, DOB quality, legacy Gender, race/ethnicity, phone and email are outside this helper's changes. Use the Birth dates helper below for the separately verified DOB conversion and existing-answer correction path. The Client Record helper does not apply any DOB correction. Use [Race and Ethnicity](assessments.md#race-and-ethnicity-combinations) for verified race writes and explicit repair. Existing assessment helpers remain separate from Client Record updates.
 
+On sc211, pressing Save validates the existing Name and Alias together, even for a Sex-only edit. With the synthetic alias `Alex (AJ) Example` the dialog stayed open and displayed “enter valid characters for the name and alias” before sending a write request. Changing the alias to `Alex AJ Example` allowed the intercepted request to proceed. This observation covers literal parentheses on that tenant.
+
+Get Help removes only `(` and `)` from a carried alias during an authorized profile update. Other applications should confirm with staff before changing an existing alias. An observed validation alert together with no outgoing write identifies a client-side rejection. A timeout or a completed Save click alone leaves the outcome unknown. Use the diagnostics below and keep the original journal, key and write history. Read Sex in a newly opened Client Record and compare Alias in both REST and that fresh form before deciding how to recover.
+
 ### Diagnose a stopped profile update
 
 Pass `onDiagnostic` to `createClientProfile` to receive structured verification events for `update`. Leave it unset to disable diagnostics. The callback runs after the journal lock is released. A thrown error or rejected listener promise leaves the update result and replay rules intact.
@@ -74,6 +78,12 @@ await birthDate.update({
 A new effective timestamp uses REST and does not need `entry`. Correcting the latest existing timestamp uses the UI because REST returned an entity-tracking error on that path. The supplied enrollment must have that exact entry timestamp and expose the named assessment. Its existing mandatory answers must be complete; the helper does not populate other answers. Earlier historical corrections, interim/exit contexts and clearing DOB are outside this helper. Incompatible browser timezones fail before REST writes rather than silently changing the displayed calendar date.
 
 Keep the same key, input and durable store for retries. Attempts are journaled before writes, uncertain results are reconciled without replay, and changed intent or later drift is rejected. Verification checks both current client API and fresh UI values because the mobile assessment projection can leave UI-created DOB values blank. Other Client Record fields, including SSN and DOB quality, and other exposed assessment answers are preserved. For UI corrections, the browser generates the current `addClientAnswersLinkedToEE` request; no captured payload is replayed.
+
+### Backdated entry with a later DOB
+
+For an individual or household entry, the SDK compares the current profile, fresh UI and mobile DOB with the dated assessment question. An unanswered DOB at entry and a matching later revision raise `DOB_HISTORICAL_BACKFILL_UNSUPPORTED` with `nextAction: 'staff-review'`. Staff must review the historical field. The SDK has no verified operation that can insert that revision while preserving the later one. A conflicting value raises `DOB_HISTORY_CONFLICT`. Incomplete reads, ambiguous questions, or a later mobile row without a usable value raise `DOB_HISTORY_EVIDENCE_UNAVAILABLE`.
+
+Retain the original key and journal. After an authorized correction, retry the original entry. An explicit matching DOB at the requested timestamp and unchanged later evidence can be verified by reads alone (`method: 'historical-read'`). The SDK rechecks both on subsequent same-key calls. Household preflight checks every member before creating the first enrollment.
 
 ## Unknown or declined birth date
 

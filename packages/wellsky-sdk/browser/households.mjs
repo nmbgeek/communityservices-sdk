@@ -15,11 +15,48 @@ const relationships=['Daughter','Father','Granddaughter','Grandfather','Grandmot
 /** Display labels observed in the training UI, October 24, 2026. Recheck for other tenants. */
 export const getHouseholdOptions=()=>({householdTypes:[...types],relationships:[...relationships],verifiedOn:'2026-10-24'});
 const sorted=members=>members.sort((a,b)=>a.clientId-b.clientId);
-const model=row=>{
+const snapshot=row=>{
  id(row?.householdId);if(row.isActive!==true||!types.includes(row.householdType)||!Array.isArray(row.clients))throw Error('Active household readback unavailable');
  const members=sorted(row.clients.map(m=>({clientId:id(m.clientId),head:m.headofhouseholdStatus,relationship:m.headofhouseholdRelationship,dateJoined:serverDate(m.dateJoined),dateEnded:m.dateLeft?serverDate(m.dateLeft):null,isActive:m.isActive})));
- guard(members);return {householdId:row.householdId,householdType:row.householdType,members};
+ return {householdId:row.householdId,householdType:row.householdType,members};
 };
+const model=row=>{const current=snapshot(row);guard(current.members);return current;};
+const ambiguous=()=>{throw Object.assign(Error('Ambiguous household membership; staff review required'),{code:'HOUSEHOLD_MEMBERSHIP_AMBIGUOUS',nextAction:'staff-review'});};
+
+// Used only for selecting an existing household. Keep all historical rows out of write payloads.
+export function coveredHousehold(row,headClientId,requests,now=new Date().toISOString()){
+ let household;
+ try{household=snapshot(row);}catch{ambiguous();}
+ const byClient=new Map();
+ for(const m of household.members){
+  if(typeof m.isActive!=='boolean'||typeof m.head!=='boolean'||!relationships.includes(m.relationship)||m.head!==(m.relationship==='Self')||
+     (!m.isActive&&!m.dateEnded)||m.dateEnded&&m.dateEnded<=m.dateJoined)ambiguous();
+  if(!byClient.has(m.clientId))byClient.set(m.clientId,[]);
+  byClient.get(m.clientId).push(m);
+ }
+ for(const intervals of byClient.values()){
+  intervals.sort((a,b)=>a.dateJoined.localeCompare(b.dateJoined));
+  for(let i=1;i<intervals.length;i++)if(!intervals[i-1].dateEnded||intervals[i-1].dateEnded>=intervals[i].dateJoined)ambiguous();
+ }
+ const at=date=>{
+  if(household.members.some(m=>m.dateEnded===date))ambiguous();
+  const members=household.members.filter(m=>m.dateJoined<=date&&(!m.dateEnded||date<m.dateEnded));
+  const heads=members.filter(m=>m.head);
+  if(members.length&&(heads.length!==1||heads[0].clientId!==headClientId))ambiguous();
+  return members;
+ };
+ const selection=at(now),coverage=[];
+ if(!selection.length)return;
+ if(!selection.find(m=>m.head)?.isActive)ambiguous();
+ for(const request of requests){
+  const current=selection.find(m=>m.clientId===request.clientId);
+  const entry=at(instant(request.dateJoined)).find(m=>m.clientId===request.clientId);
+  if(!current||!entry)return;
+  if(!current.isActive||entry.relationship!==current.relationship||request.relationship!==undefined&&entry.relationship!==request.relationship)ambiguous();
+  coverage.push({entry,current});
+ }
+ return {household,coverage};
+}
 const guard=members=>{
  if(!members.length||new Set(members.map(m=>m.clientId)).size!==members.length)throw Error('Unique household members required');
  const heads=members.filter(m=>m.head);
@@ -49,10 +86,13 @@ export function createHouseholds({api,store,ui}) {
    if(rows.length===total)return rows;if(!result.values.length||rows.length>total)throw Error('Incomplete household list');
   }throw Error('Household list exceeds safety limit');
  };
- const run=async(kind,input)=>{
+ const run=async(kind,input,options={})=>{
+  fields(options,['reuseContainingHousehold']);
+  if(options.reuseContainingHousehold!==undefined&&typeof options.reuseContainingHousehold!=='boolean')throw Error('Boolean household reuse option required');
   const keys={create:['key','headClientId','householdType','members'],addMembers:['key','householdId','headClientId','householdType','members'],endMembers:['key','householdId','headClientId','clientIds','dateEnded'],updateRelationships:['key','householdId','headClientId','members']};
   fields(input,keys[kind]);id(input.headClientId);if(typeof input.key!=='string'||!input.key.trim()||input.key.length>200)throw Error('Stable household key required');
   const intent={kind,headClientId:input.headClientId};
+  if(options.reuseContainingHousehold)intent.reuseContainingHousehold=true;
   if(kind!=='create')intent.householdId=id(input.householdId);
   if(kind==='create'||input.householdType!==undefined){if(!types.includes(input.householdType))throw Error('Unavailable household type');intent.householdType=input.householdType;}
   if(kind==='create'||kind==='addMembers'){
@@ -74,16 +114,38 @@ export function createHouseholds({api,store,ui}) {
    let entry=entries.find(e=>e.keyHash===keyHash);if(entries.filter(e=>e.keyHash===keyHash).length>1||entry&&entry.intentHash!==intentHash)throw Error('Household key conflicts with earlier intent');
    if(entries.some(e=>e.keyHash!==keyHash&&e.stage!=='verified'))throw Error('Another household write is unresolved');
    const persist=async stage=>{entry={...entry,version:1,keyHash,intentHash,stage};const i=entries.findIndex(e=>e.keyHash===keyHash);if(i<0)entries.push(entry);else entries[i]=entry;await store.write(scope,structuredClone(entries));};
+   let listed;
+   if(options.reuseContainingHousehold&&(!entry||entry.selected||entry.stage==='planned')){
+    listed=await list(input.headClientId,!entry);
+    const candidates=listed.filter(h=>h.isActive!==false&&h.householdType===intent.householdType&&intent.members.every(m=>h.clients.some(c=>c.clientId===m.clientId)));
+    const now=new Date().toISOString();
+    const covered=candidates.map(h=>coveredHousehold(h,intent.headClientId,intent.members,now)).filter(Boolean);
+    if(covered.length>1||!covered.length&&candidates.length)ambiguous();
+    const selected=covered[0];
+    if(entry?.selected&&selected?.household.householdId!==entry.householdId||entry&&!entry.selected&&selected)ambiguous();
+    if(selected){
+     const wasVerified=entry?.stage==='verified';
+     const coverageHash=hash(selected.coverage);
+     if(entry&&coverageHash!==entry.coverageHash)ambiguous();
+     if(!entry){entry={householdId:selected.household.householdId,selected:true,coverageHash};await persist('planned');}
+     const fresh=toItems(await api.households.get({path:{householdId:entry.householdId}}));
+     if(fresh.length!==1||fresh[0]?.householdId!==entry.householdId||fresh[0].householdType!==intent.householdType)ambiguous();
+     const verified=coveredHousehold(fresh[0],intent.headClientId,intent.members);
+     if(!verified||hash(verified.coverage)!==coverageHash)ambiguous();
+     await persist('verified');return {key:input.key,outcome:wasVerified?'already-present':'verified',household:verified.household};
+    }
+   }
    if(entry?.stage==='verified'){
-    const current=await read(entry.householdId),latest=entries.filter(e=>e.householdId===entry.householdId&&e.stage==='verified').at(-1);
+    const current=await read(entry.householdId),latest=entries.filter(e=>e.householdId===entry.householdId&&!e.selected&&e.stage==='verified').at(-1);
     if(guard(current.members)!==input.headClientId||!equal(current,latest.target))throw Error('Household changed since verification; reconcile before continuing');
     return {key:input.key,outcome:'already-present',household:current};
    }
    let current;
    if(kind==='create'){
-    const existing=await list(input.headClientId,!entry);
+    const existing=listed??await list(input.headClientId,!entry);
     if(!entry){entry={target:{householdType:intent.householdType,members:intent.members},baselineIds:existing.map(h=>h.householdId)};await persist('planned');}
-    const matches=existing.filter(h=>h.isActive===true).map(model).filter(h=>equal(h,entry.target));
+    const possible=existing.filter(h=>h.isActive===true&&(!options.reuseContainingHousehold||h.householdType===intent.householdType&&intent.members.every(m=>h.clients.some(c=>c.clientId===m.clientId))));
+    const matches=possible.map(model).filter(h=>equal(h,entry.target));
     if(matches.length>1)throw Error('Multiple matching households');current=matches[0];
    }else{
     current=await read(input.householdId);if(guard(current.members)!==input.headClientId)throw Error('Head changes are not supported');
@@ -111,5 +173,5 @@ export function createHouseholds({api,store,ui}) {
    entry.householdId=current.householdId;await persist('verified');return {key:input.key,outcome:'verified',household:current};
   });
  };
- return {read,create:input=>run('create',input),addMembers:input=>run('addMembers',input),endMembers:input=>run('endMembers',input),updateRelationships:input=>run('updateRelationships',input)};
+ return {read,create:(input,options)=>run('create',input,options),addMembers:input=>run('addMembers',input),endMembers:input=>run('endMembers',input),updateRelationships:input=>run('updateRelationships',input)};
 }

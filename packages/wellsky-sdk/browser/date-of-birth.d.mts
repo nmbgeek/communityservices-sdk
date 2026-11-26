@@ -7,6 +7,8 @@ export interface BirthDateUpdate {
  /** Strict calendar date, not a timestamp. */dateOfBirth:string;
  /** Explicit instant. Never moved to avoid an existing-answer conflict. */effectiveDate:string;
  /** Required to correct a DOB at the same effective timestamp as this enrollment's entry. */entry?:BirthDateEntry;
+ /** When set, require read-only verification of this later revision and the exact earlier DOB. */
+ laterEffectiveDate?:string;
 }
 export interface DateOfBirthUi {
  readonly connection?:import("./connection.mjs").UiConnection;
@@ -20,8 +22,8 @@ export interface DateOfBirth {
  /** Read-only preflight; allowEntryCorrection reserves no write and creates no enrollment. */
  validate(input:{clientId:number;assessmentCode:string;dateOfBirth:string;effectiveDate:string;allowEntryCorrection?:boolean}):Promise<BirthDateSnapshot>;
  /** allowLater permits the same calendar value at a newer effective timestamp. */
- verify(input:{clientId:number;assessmentCode:string;dateOfBirth:string;effectiveDate:string;allowLater?:boolean}):Promise<BirthDateSnapshot&{dateOfBirth:string;effectiveDate:string}>;
- update(input:BirthDateUpdate):Promise<{clientId:number;dateOfBirth:string;effectiveDate:string;method:'rest'|'ui';outcome:'verified'|'already-present'}>;
+ verify(input:{clientId:number;assessmentCode:string;dateOfBirth:string;effectiveDate:string;allowLater?:boolean;laterEffectiveDate?:string}):Promise<BirthDateSnapshot&{dateOfBirth:string;effectiveDate:string}>;
+ update(input:BirthDateUpdate):Promise<{clientId:number;dateOfBirth:string;effectiveDate:string;method:'rest'|'ui'|'historical-read';laterEffectiveDate?:string;outcome:'verified'|'already-present'}>;
 }
 export function validateBirthDate(value:unknown):string;
 export function createDateOfBirth(options:{api:WellSkyClient;ui:DateOfBirthUi;store:UiMutationStore}):DateOfBirth;

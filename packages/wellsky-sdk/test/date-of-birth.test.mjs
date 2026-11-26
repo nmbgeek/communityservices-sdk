@@ -87,3 +87,22 @@ for(const quality of ["Client doesn't know (HUD)",'Client prefers not to answer 
  for(const missing of [undefined,null,''])await assert.rejects(f.helper().update(input({dateOfBirth:missing})),/valid YYYY-MM-DD/);
  assert.equal(f.client.svpprofdobtype,quality);assert.deepEqual(f.counts(),{writes:0,uiWrites:0});assert.equal(f.entries.size,0);
 });
+
+test('historical DOB distinguishes read failure, malformed evidence, a conflicting answer and a confirmed blank',async()=>{
+ const f=fixture(),i=input({dateOfBirth:'1980-07-04',effectiveDate:'2026-10-23T17:00:00Z'});
+ const blank={virt_field_name:'SVPPROFDOB',question_type:'date',answer_value:null,date_effective:null};
+ for(const [rows,code] of [
+  [[], 'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],[[blank,blank],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,question_type:'textbox'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,answer_value:'invalid'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,date_effective:'2026-10-23T16:00:00'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,answer_value:'1990-01-01 00:00:00-07',date_effective:'2026-10-23T17:00:00'}],'DOB_HISTORY_CONFLICT'],
+  [[blank],'DOB_HISTORICAL_BACKFILL_UNSUPPORTED'],
+ ]){
+  f.api.assessments={get:async({path,query})=>{assert.equal(path.clientId,1);assert.equal(path.assessmentCode,'ENTRY');assert.equal(query.dateEffective,new Date(i.effectiveDate).toISOString());return rows;}};
+  await assert.rejects(f.helper().update(i),e=>e.code===code&&e.nextAction==='staff-review');
+ }
+ f.api.assessments.get=async()=>{throw Object.assign(Error('unavailable'),{status:503});};
+ await assert.rejects(f.helper().update(i),e=>e.code==='DOB_HISTORY_EVIDENCE_UNAVAILABLE'&&e.status===503);
+ assert.equal(f.entries.size,0);assert.deepEqual(f.counts(),{writes:0,uiWrites:0});
+});

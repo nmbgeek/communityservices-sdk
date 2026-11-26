@@ -286,6 +286,7 @@ export interface EnrollmentWorkflowOptions {
 }
 export class EnrollmentWorkflowError extends Error {
   readonly discovery?:EnrollmentWorkflowDiscovery|ExitWorkflowDiscovery;
+  readonly nextAction?:'staff-review';
   readonly reason:string;
   readonly code:string;
   readonly committed:false|'unknown';
