@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.3 - 2026-11-26
+
+- Report a stable DOB history reason for a verified blank at backdated entry. Keep staff review and distinguish a blank from an earlier answer in a context that requires an exact timestamp (#19).
+
 ## 0.15.2 - 2026-11-26
 
 - Exclude a household with a verified different head during containing-household selection (#20).

@@ -1173,7 +1173,8 @@ test('backdated DOB stops before writes, then reconciles a staff correction and 
  const later={field:'SVPPROFDOB',value:'1984-02-29 00:00:00-07',date:reviewDate};
  f.history.push(later);
  const attempt=()=>f.workflow().createEnrollment(input);
- for(let i=0;i<2;i++)await assert.rejects(attempt(),e=>e.code==='DOB_HISTORICAL_BACKFILL_UNSUPPORTED'&&e.nextAction==='staff-review'&&e.committed===false);
+ const blank={code:'DOB_HISTORICAL_BACKFILL_UNSUPPORTED',dobHistoryReason:'blank-at-effective-date',nextAction:'staff-review',committed:false,step:'birth-date'};
+ for(let i=0;i<2;i++)await assert.rejects(attempt(),blank);
  assert.equal(f.counts.enrollment,0);assert.equal(f.journal.size,0);
  const earlier={...later,date:entryDate};f.history.unshift(earlier);
  assert.equal((await attempt()).birthDate.effectiveDate,new Date(entryDate).toISOString());

@@ -1,6 +1,6 @@
 import type {EntryExitType} from './entry-exit-types.mjs';
 export type {EntryExitType} from './entry-exit-types.mjs';
-import type {DateOfBirth} from './date-of-birth.mjs';
+import type {BirthDateHistoryReason,DateOfBirth} from './date-of-birth.mjs';
 import type {FormWriteLabels, PicklistCatalogSnapshot, Answers, AssessmentDefinition, EncodingOptions, GwtEnrollmentHelpers, Provider, WellSkyClient} from '../dist/esm/index.js';
 import type {UiMutationStore,EnrollmentReader} from './index.mjs';
 import type {ProviderAssessmentItem, ProgramDiscovery} from './program-discovery.mjs';
@@ -287,6 +287,8 @@ export interface EnrollmentWorkflowOptions {
 export class EnrollmentWorkflowError extends Error {
   readonly discovery?:EnrollmentWorkflowDiscovery|ExitWorkflowDiscovery;
   readonly nextAction?:'staff-review';
+  /** For DOB_HISTORICAL_BACKFILL_UNSUPPORTED, distinguishes a verified blank from an exact-date requirement. */
+  readonly dobHistoryReason?:BirthDateHistoryReason;
   readonly reason:string;
   readonly code:string;
   readonly committed:false|'unknown';

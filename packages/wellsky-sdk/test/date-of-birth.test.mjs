@@ -91,16 +91,21 @@ for(const quality of ["Client doesn't know (HUD)",'Client prefers not to answer 
 test('historical DOB distinguishes read failure, malformed evidence, a conflicting answer and a confirmed blank',async()=>{
  const f=fixture(),i=input({dateOfBirth:'1980-07-04',effectiveDate:'2026-10-23T17:00:00Z'});
  const blank={virt_field_name:'SVPPROFDOB',question_type:'date',answer_value:null,date_effective:null};
- for(const [rows,code] of [
+ for(const [rows,code,dobHistoryReason] of [
   [[], 'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],[[blank,blank],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
   [[{...blank,question_type:'textbox'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
   [[{...blank,answer_value:'invalid'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
   [[{...blank,date_effective:'2026-10-23T16:00:00'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
   [[{...blank,answer_value:'1990-01-01 00:00:00-07',date_effective:'2026-10-23T17:00:00'}],'DOB_HISTORY_CONFLICT'],
-  [[blank],'DOB_HISTORICAL_BACKFILL_UNSUPPORTED'],
+  [[{...blank,date_effective:undefined}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,answer_value:undefined}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,answer_value_text:'present'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[{...blank,answer_value_code:'present'}],'DOB_HISTORY_EVIDENCE_UNAVAILABLE'],
+  [[blank],'DOB_HISTORICAL_BACKFILL_UNSUPPORTED','blank-at-effective-date'],
+  [[{...blank,answer_value:'',date_effective:''}],'DOB_HISTORICAL_BACKFILL_UNSUPPORTED','blank-at-effective-date'],
  ]){
   f.api.assessments={get:async({path,query})=>{assert.equal(path.clientId,1);assert.equal(path.assessmentCode,'ENTRY');assert.equal(query.dateEffective,new Date(i.effectiveDate).toISOString());return rows;}};
-  await assert.rejects(f.helper().update(i),e=>e.code===code&&e.nextAction==='staff-review');
+  await assert.rejects(f.helper().update(i),e=>e.code===code&&e.nextAction==='staff-review'&&e.dobHistoryReason===dobHistoryReason);
  }
  f.api.assessments.get=async()=>{throw Object.assign(Error('unavailable'),{status:503});};
  await assert.rejects(f.helper().update(i),e=>e.code==='DOB_HISTORY_EVIDENCE_UNAVAILABLE'&&e.status===503);
@@ -152,4 +157,15 @@ test('earlier DOB history requires client and question evidence and a single val
  await assert.rejects(f.update(),{code:'DOB_HISTORY_EVIDENCE_UNAVAILABLE'});
  f.setRows([f.dated]);f.latest.client_id=2;
  await assert.rejects(f.update(),{code:'DOB_HISTORY_EVIDENCE_UNAVAILABLE'});
+});
+
+test('a matching earlier DOB in an exact-instant context has a separate stable reason',async()=>{
+ const f=earlierBirth();
+ const {clientId,assessmentCode,dateOfBirth,effectiveDate}=f.i;
+ const exact={clientId,assessmentCode,dateOfBirth,effectiveDate};
+ const expected={code:'DOB_HISTORICAL_BACKFILL_UNSUPPORTED',dobHistoryReason:'exact-instant-required',nextAction:'staff-review'};
+ await assert.rejects(f.helper().validate(exact),expected);
+ await assert.rejects(f.helper().update({...exact,key:f.i.key}),expected);
+ assert.equal(f.entries.size,0);
+ assert.deepEqual(f.counts(),{writes:0,uiWrites:0});
 });

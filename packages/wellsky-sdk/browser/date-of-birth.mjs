@@ -22,9 +22,12 @@ const answerDate=value=>{
 };
 const effective=value=>{if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value))fail('unexpected answer effective date');return instant(value+'Z');};
 
-const historyError=(code,message,cause)=>Object.assign(new Error('Date of birth: '+message,{cause}),{code,nextAction:'staff-review',step:'birth-date',fields:['SVPPROFDOB'],...(cause?.status?{status:cause.status}:{})});
+const historyError=(code,message,{cause,dobHistoryReason}={})=>Object.assign(new Error('Date of birth: '+message,{cause}),{
+ code,nextAction:'staff-review',step:'birth-date',fields:['SVPPROFDOB'],
+ ...(cause?.status?{status:cause.status}:{}),...(dobHistoryReason?{dobHistoryReason}:{}),
+});
 const conflict=message=>historyError('DOB_HISTORY_CONFLICT',message);
-const unavailable=cause=>historyError('DOB_HISTORY_EVIDENCE_UNAVAILABLE','DOB evidence unavailable',cause);
+const unavailable=cause=>historyError('DOB_HISTORY_EVIDENCE_UNAVAILABLE','DOB evidence unavailable',{cause});
 const blank=value=>value===null||value==='';
 
 /** Calendar-date writer. New effective timestamps use REST;
@@ -80,16 +83,23 @@ export function createDateOfBirth({api,ui,store}){
    }
   }catch(cause){if(cause?.nextAction||cause?.code==='SESSION_INTERRUPTED')throw cause;throw unavailable(cause);}
   if(!historicalDate){
-   if(!blank(row.date_effective)||row.answer_value_text)throw unavailable();
-   throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to backfill the unanswered DOB');
+   if(!blank(row.date_effective)||
+      [row.answer_value_text,row.answer_value_code].some(value=>value!==undefined&&!blank(value)))throw unavailable();
+   throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to backfill the unanswered DOB',{
+    dobHistoryReason:'blank-at-effective-date',
+   });
   }
   if(historicalDate!==input.dateOfBirth)throw conflict('dated and current DOB disagree');
   if(expectedHistorical&&historicalAt!==expectedHistorical)throw conflict('historical DOB revision changed');
-  if(historicalAt!==input.effectiveDate&&!allowEarlier)throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to verify the requested effective instant');
   // The mobile projection can omit UI-created values. For this broader path require
   // both reads to agree on the question ID in addition to the profile and fresh UI DOB.
   if((!current.mobileValue||historicalAt!==input.effectiveDate)&&
      (!Number.isSafeInteger(current.questionId)||current.questionId<1||row.question_id!==current.questionId))throw unavailable();
+  if(historicalAt!==input.effectiveDate&&!allowEarlier){
+   throw historyError('DOB_HISTORICAL_BACKFILL_UNSUPPORTED','historical correction requires staff to verify the requested effective instant',{
+    dobHistoryReason:'exact-instant-required',
+   });
+  }
   return historicalAt;
  };
  const update=async raw=>{

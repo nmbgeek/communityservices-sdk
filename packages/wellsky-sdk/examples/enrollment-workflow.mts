@@ -1,5 +1,6 @@
 import {
   createEnrollmentWorkflow,
+  EnrollmentWorkflowError,
   type EntryExitType,
   type EnrollmentAssessmentPlan,
   type EnrollmentWorkflowDiscovery,
@@ -62,4 +63,12 @@ export async function enrollAndReview(
     assessment:{...input.buildInterimPlan(entry,reviewCatalog), ...(reviewCatalog.schemaRevision ? {schemaRevision:reviewCatalog.schemaRevision} : {})},
   });
   return {entry,interim};
+}
+
+/** Use this on enrollment failures to route a verified blank DOB to staff. */
+export function needsEntryBirthDateReview(error:unknown):boolean {
+  return error instanceof EnrollmentWorkflowError &&
+    (error.operation==='createEnrollment'||error.operation==='createHouseholdEnrollment') &&
+    error.code==='DOB_HISTORICAL_BACKFILL_UNSUPPORTED' &&
+    error.dobHistoryReason==='blank-at-effective-date' && error.nextAction==='staff-review';
 }

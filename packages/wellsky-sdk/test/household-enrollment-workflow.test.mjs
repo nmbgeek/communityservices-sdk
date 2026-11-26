@@ -680,20 +680,32 @@ test('adoption status uses the first group write and can read older member evide
  assert.equal(Object.hasOwn(await read(),'durableDiscovery'),false);
 });
 
-test('a later matching DOB with blank entry history blocks the entire household on same-key retries',async()=>{
+test('a verified blank DOB blocks the entire household until a staff correction verifies on a same-key retry',async()=>{
  const f=householdBirthFixture();
+ f.births.set(1,{dateOfBirth:'1984-02-29',effectiveDate:new Date(entryDate).toISOString()});
+ let staffCorrected=false;
  f.births.set(2,{dateOfBirth:'1992-07-03',effectiveDate:new Date(reviewDate).toISOString()});
  const get=f.api.assessments.get;
  f.api.assessments.get=async args=>{
   const rows=await get(args),dob=rows.find(q=>q.virt_field_name==='SVPPROFDOB');
   if(args.path.clientId===2){
    if(!args.query)dob.answer_value='1992-07-03 00:00:00-07';
-   else if(Date.parse(args.query.dateEffective)<Date.parse(reviewDate))Object.assign(dob,{answer_value:null,date_effective:null});
+   else if(Date.parse(args.query.dateEffective)<Date.parse(reviewDate)){
+    const corrected=staffCorrected&&Date.parse(args.query.dateEffective)>=Date.parse(entryDate);
+    Object.assign(dob,{answer_value:corrected?'1992-07-03 00:00:00-07':null,date_effective:corrected?entryDate.slice(0,19):null});
+   }
   }
   return rows;
  };
- for(let i=0;i<2;i++)await assert.rejects(f.workflow().createHouseholdEnrollment(f.entry),e=>e.code==='DOB_HISTORICAL_BACKFILL_UNSUPPORTED'&&e.committed===false);
+ const attempt=()=>f.workflow().createHouseholdEnrollment(f.entry);
+ const blank={code:'DOB_HISTORICAL_BACKFILL_UNSUPPORTED',dobHistoryReason:'blank-at-effective-date',nextAction:'staff-review',committed:false,step:'birth-date'};
+ for(let i=0;i<2;i++)await assert.rejects(attempt(),blank);
  assert.equal(f.counts.entry,0);assert.equal(f.counts.attach,0);assert.equal(f.writes.size,0);assert.equal(f.journal.size,0);
+ staffCorrected=true;
+ assert.equal((await attempt()).members.length,2);
+ assert.equal((await attempt()).outcome,'already-present');
+ assert.equal(f.counts.entry,1);assert.equal(f.counts.attach,1);assert.equal(f.writes.size,0);
+ assert.equal(f.births.get(2).effectiveDate,new Date(reviewDate).toISOString());
 });
 test('household entry accepts a rejoined member with disjoint intervals and rejects overlapping history',async()=>{
  const f=fixture();f.household.householdType='Other';

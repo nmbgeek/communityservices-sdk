@@ -140,7 +140,13 @@ export function createEnrollmentWorkflow({api,discovery,helpers,store,enrollment
    const error=cause instanceof EnrollmentWorkflowError?cause:new EnrollmentWorkflowError(cause instanceof Error?cause.message:'upstream workflow operation failed',{
     code:staffReview?cause.code:cause?.code==='SESSION_INTERRUPTED'?'SESSION_INTERRUPTED':cause?.kind==='validation'?'WORKFLOW_VALIDATION_FAILED':'WORKFLOW_UPSTREAM_FAILURE',...(typeof cause?.step==='string'?{step:cause.step}:{}),...(Array.isArray(cause?.fields)&&cause.fields.every(f=>typeof f==='string')?{fields:cause.fields}:{}),cause});
    if(cause?.code==='SESSION_INTERRUPTED')error.reauthenticated=cause.reauthenticated;
-   if(staffReview)error.nextAction='staff-review';
+   if(staffReview){
+    error.nextAction='staff-review';
+    if(cause.code==='DOB_HISTORICAL_BACKFILL_UNSUPPORTED'&&
+       (cause.dobHistoryReason==='blank-at-effective-date'||cause.dobHistoryReason==='exact-instant-required')){
+     error.dobHistoryReason=cause.dobHistoryReason;
+    }
+   }
    error.operation=operation;
    error.committed=state.attempted||cause instanceof EnrollmentReadError&&cause.committed==='unknown'||cause?.code==='ENTRY_CORRECTION_UNCERTAIN'?'unknown':false;
    if(operation==='resolveEntryCorrection')error.originalCommitted='unknown';

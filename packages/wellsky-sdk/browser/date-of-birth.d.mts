@@ -1,6 +1,8 @@
 import type {Page} from 'playwright-core';
 import type {WellSkyClient} from '../dist/esm/index.js';
 import type {UiMutationStore} from './index.mjs';
+/** Further classifies DOB_HISTORICAL_BACKFILL_UNSUPPORTED. */
+export type BirthDateHistoryReason='blank-at-effective-date'|'exact-instant-required';
 export interface BirthDateEntry {enrollmentId:number;assessmentName:string;}
 export interface BirthDateUpdate {
  clientId:number;key:string;assessmentCode:string;
