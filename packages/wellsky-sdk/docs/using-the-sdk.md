@@ -106,6 +106,8 @@ The root import uses V3. Import `WellSkyClient` from `@choiceapps/communityservi
 
 Requests take a single object containing `path`, `query`, and/or `body`. Match the parameter spelling in the [API table](../API.md). `toItems()` normalizes supported collection response shapes; it does not turn HTTP errors into empty results. A 404 can indicate an upstream problem, so do not assume it means no record exists.
 
+For client matching, see [Search for active clients](rest-client.md#search-for-active-clients).
+
 For large reads, use `api.paginate()` rather than treating one page as a complete result. For bounded groups of independent calls, use `api.bulk()`. Both are covered in [pagination and bulk calls](rest-client.md#bulk-execution-and-pagination).
 
 ## 5. Open a browser session when needed

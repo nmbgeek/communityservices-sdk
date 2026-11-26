@@ -50,6 +50,20 @@ Dates remain strings. The SDK does not convert a calendar date through a timezon
 
 In the SDK source checkout, `specs/overrides.json` records observed response-only corrections where Swagger differs from live behavior. In particular, optional service program-information objects can be null. It does not loosen request validation.
 
+### Search for active clients
+
+WellSky V3 can return inactive clients from both `clients.list()` and `clients.listSimplified()`. Those records carry `isActive: false`. The SDK preserves the server's results, including inactive records.
+
+For an active-only match search, add `isActive eq true` to the OData `$filter`. If you already have search criteria, wrap them in parentheses before adding the active-status clause. Use the same filter with either list method.
+
+```js
+const people = toItems(await api.clients.listSimplified({
+  query: {$filter: "(firstName eq 'Jamie' and lastName eq 'Example') and isActive eq true"},
+}));
+```
+
+Use `$filter: 'isActive eq true'` when active status is your only criterion.
+
 ## Bulk execution and pagination
 
 ```ts
